@@ -153,6 +153,8 @@ DT_MDL = 0.05
 # can swing through a 100-m-radius turn (κ=0.01) in 0.27 s; at 29 m/s
 # the same swing takes 2.9 s — proportional to the time-to-cover the
 # corner.
+# Unwind-vs-wind rate asymmetry (Hyundai carcontroller 7/3).
+_UNWIND_RATE_RATIO = 7.0 / 3.0
 _MAX_CURV_RATE_LO_V = 2.0
 _MAX_CURV_RATE_HI_V = 29.0
 _MAX_CURV_RATE_LO = 0.03762194918267951
@@ -246,10 +248,18 @@ def desired_curvature_lag_adjusted(
             [_MAX_CURV_RATE_LO, _MAX_CURV_RATE_HI],
         ))
     max_delta = max_rate * DT_MDL
+    # openpilot lets the wheel UNWIND (curvature moving toward zero)
+    # faster than it winds in — the carcontroller torque-rate limits
+    # are asymmetric (e.g. Hyundai STEER_DELTA_UP 3 vs _DOWN 7 per
+    # frame). Apply the same ~2.3x allowance to deltas that shrink
+    # the command's magnitude.
+    unwind = _UNWIND_RATE_RATIO
+    lo = max_delta * (unwind if last_desired_curvature > 0 else 1.0)
+    hi = max_delta * (unwind if last_desired_curvature < 0 else 1.0)
     safe_desired_k = float(np.clip(
         desired_k,
-        last_desired_curvature - max_delta,
-        last_desired_curvature + max_delta,
+        last_desired_curvature - lo,
+        last_desired_curvature + hi,
     ))
     # openpilot's clip_curvature also clamps the magnitude: lateral
     # accel (v^2 * k) to +/-3.0 m/s^2, and curvature to +/-0.2 (a turn

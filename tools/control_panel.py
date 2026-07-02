@@ -39,6 +39,7 @@ import socket
 import sys
 import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -142,7 +143,7 @@ class Telemetry(threading.Thread):
 
 MOD_PORT = 64257
 MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
-            "cal", "ai", "spd_dn", "spd_up"}
+            "cal", "ai", "spd_dn", "spd_up", "cam"}
 
 
 class ModBridge(threading.Thread):
@@ -221,7 +222,7 @@ class Panel:
     def layout(self, y0: int) -> None:
         labels = [("engage", ""), ("lane_l", "< LANE"), ("lane_r", "LANE >"),
                   ("turn_l", "< TURN"), ("turn_r", "TURN >"),
-                  ("long", ""), ("cal", "CAL"), ("ai", "AI"),
+                  ("long", ""), ("cal", "CAL"), ("cam", ""), ("ai", "AI"),
                   ("spd_dn", "SPD-"), ("spd_up", "SPD+")]
         n = len(labels)
         w = CAM_W // n
@@ -258,6 +259,9 @@ class Panel:
                 col = (40, 110, 140) if app.cal_active else (70, 70, 70)
                 if app.cal_active:
                     lab = f"CAL {int(app.cal_left_s)}s"
+            elif key == "cam":
+                lab = f"CAM {'LIVE' if app.calib_live else 'shdw'}"
+                col = (150, 120, 40) if app.calib_live else (70, 70, 70)
             else:
                 col = (70, 70, 70)
             cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), col, -1)
@@ -312,6 +316,13 @@ class App:
         # calib (warp + overlay) once CALIBRATED. Persists per-game, so
         # like openpilot it fully calibrates once and refines forever.
         self.lc = LiveCalib(game="beamng")
+        # SHADOW by default (field report 2026-07-01: stops-short, lane
+        # drift, and long hunting all appeared together after livecalib
+        # started applying — and it was rejecting 73% of its samples).
+        # The learner keeps estimating and the HUD shows what it WOULD
+        # apply; the CAM button ('v') A/Bs application live.
+        self.calib_live = False
+        self.lc.apply = False
         self.lat = LateralController(cfg, live_params=self.lp)
         self.long = LongitudinalController(cfg)
 
@@ -339,6 +350,19 @@ class App:
         # mystery) — main loop writes the frame+state on request
         self._incident_t = 0.0
         self.incident_note: str | None = None
+        # Model-wants vs car-does instrumentation: ~15 s sparkline ring
+        # buffers drawn on the viewer, plus a per-session CSV run log
+        # (every control tick) for offline plots — tools/plot_run.py.
+        self.charts_on = True
+        self.chart = {k: deque(maxlen=300)
+                      for k in ("v", "vT", "a", "aM", "k", "kM")}
+        self._a_meas_app = 0.0
+        self._chart_v_prev: float | None = None
+        self.lane_off_now = 0.0
+        self._log_f = None
+        self.log_path = os.path.join(
+            ROOT, "debug_out",
+            f"run_{time.strftime('%Y%m%d_%H%M%S')}.csv")
 
     # ---- UI actions ----
 
@@ -407,6 +431,8 @@ class App:
             self.set_banner(f"BeamNG AI {'ON' if self.ai_on else 'OFF'}")
         elif key == "cal":
             self.start_cal()
+        elif key == "cam":
+            self.set_calib_live(not self.calib_live)
         elif key in ("spd_dn", "spd_up"):
             # step in whole-5-mph notches (55, 60, 65 ...) like a real
             # cruise stalk; snap first in case the cap started off-grid
@@ -415,6 +441,31 @@ class App:
             mph = min(100.0, max(10.0, mph))
             self.cfg.max_speed_mps = mph / 2.237
             self.set_banner(f"max speed {mph:.0f} mph")
+
+    def set_calib_live(self, on: bool) -> None:
+        """A/B the camera-pose learner's APPLICATION (not its learning).
+        ON: commit the learned pitch/yaw/height into the warp now and
+        let future blocks keep refining it. OFF (shadow): the learner
+        keeps estimating but the warp returns to the stock mount —
+        the model sees exactly what it saw before livecalib existed."""
+        self.calib_live = on
+        self.lc.apply = on
+        if on:
+            if self.lc.pitch_estimate is not None:
+                self.calib.pitch_deg = float(self.lc.pitch_estimate)
+                self.calib.yaw_deg = float(self.lc.yaw_estimate or 0.0)
+            if self.lc.height_estimate is not None:
+                self.calib.height_m = float(self.lc.height_estimate)
+            self.set_banner(
+                f"camera calib LIVE: pitch {self.calib.pitch_deg:+.2f} "
+                f"yaw {self.calib.yaw_deg:+.2f} h {self.calib.height_m:.2f}",
+                3.5)
+        else:
+            self.calib.pitch_deg = 0.0
+            self.calib.yaw_deg = 0.0
+            self.calib.height_m = CAM_HEIGHT_M
+            self.set_banner("camera calib SHADOW: stock mount pose "
+                            "(learner keeps estimating)", 3.5)
 
     def _update_signal(self) -> None:
         """Blinker follows the active desire (left for turn/lane L,
@@ -560,6 +611,13 @@ class App:
                 if d_m > table[-1][0] + 0.05:
                     table.append((d_m, p_m))
             if len(table) >= 3:
+                # Wheel lockup can make FULL pedal measure LESS decel
+                # than a partial press — the inverse map must still be
+                # monotonic in pedal or interp commands LESS brake for
+                # MORE demand (shipped once: [.., 7.2->1.0, 7.9->0.6]).
+                for i in range(1, len(table)):
+                    table[i] = (table[i][0],
+                                max(table[i][1], table[i - 1][1]))
                 # terminal point: anything beyond the strongest
                 # measured decel gets full pedal (AEB lands here)
                 table.append((table[-1][0] + 3.0, 1.0))
@@ -699,6 +757,51 @@ class App:
 
         self.last_steer, self.last_thr, self.last_brk = steer, thr, brk
 
+        # ---- model-wants vs car-does instrumentation ----
+        # Own measured-accel LPF (the long controller's only updates
+        # while it runs; we want the trace during manual driving too).
+        if self._chart_v_prev is not None and dt > 1e-3:
+            a_raw = (v_ego - self._chart_v_prev) / dt
+            self._a_meas_app += 0.15 * (
+                float(np.clip(a_raw, -12.0, 12.0)) - self._a_meas_app)
+        self._chart_v_prev = v_ego
+        self.lane_off_now = float(np.mean(decoded.lane_lines[1:3, 0, 0]))
+        long_live = self.engaged and self.long_mode != "off" \
+            and not self.cal_active
+        lat_live = self.engaged and not self.cal_active
+        nan = float("nan")
+        self.chart["v"].append(v_ego)
+        self.chart["vT"].append(
+            min(self.long.last_v_target, 99.0) if long_live else nan)
+        self.chart["a"].append(self.long.last_a_cmd if long_live else nan)
+        self.chart["aM"].append(self._a_meas_app)
+        self.chart["k"].append(
+            self.lat.last_curvature if lat_live else nan)
+        yaw_k = yaw_rate / max(v_ego, 1.0) if v_ego > 1.0 else 0.0
+        self.chart["kM"].append(yaw_k)
+        if self._log_f is None:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+            self._log_f = open(self.log_path, "w", buffering=1)
+            self._log_f.write(
+                "t,eng,mode,cal,v_ego,v_target,a_target,a_cmd,a_fb,"
+                "a_meas,thr,brk,steer,k_des,k_meas,lane_off,lead_x,"
+                "lead_p,pitch_applied,pitch_learned\n")
+            print(f"[panel] run log: {self.log_path}", flush=True)
+        lead_p = (float(decoded.lead_prob[0])
+                  if decoded.lead_prob.size else 0.0)
+        self._log_f.write(
+            f"{now:.3f},{int(self.engaged)},{self.long_mode},"
+            f"{int(self.cal_active)},{v_ego:.3f},"
+            f"{min(self.long.last_v_target, 99.0):.3f},"
+            f"{self.long.last_a_target:.3f},{self.long.last_a_cmd:.3f},"
+            f"{self.long.last_a_fb:.3f},{self._a_meas_app:.3f},"
+            f"{thr:.3f},{brk:.3f},{steer:.4f},"
+            f"{self.lat.last_curvature:.5f},{yaw_k:.5f},"
+            f"{self.lane_off_now:.3f},"
+            f"{min(self.long.last_lead_x, 999.0):.1f},{lead_p:.2f},"
+            f"{self.calib.pitch_deg:.3f},"
+            f"{self.lc.pitch_estimate if self.lc.pitch_estimate is not None else 0.0:.3f}\n")
+
         # flight recorder trigger: engaged, moving, and the plan's
         # velocity target collapsed well below current speed with no
         # lead engaged — capture the scene (throttled to 1 per 4 s)
@@ -740,18 +843,76 @@ class App:
         if abs(off_now) < 3.0:
             self._off_ema += 0.005 * (off_now - self._off_ema)
         trust = "OK" if lp.trusted() else "COLD"
+        lc_p = self.lc.pitch_estimate
         l3 = (f"rack a={lp.a_linear:+.2f} b={lp.b_quad:+.4f} "
               f"n={max(lp.samples, lp.session_samples)} [{trust}]"
               f"  off~{self._off_ema:+.2f}m"
               f"  trim {self.lat.axis_trim_state:+.3f}"
               f"({self.lat.last_trim_frozen_reason or 'run'})"
-              f"  cam[{self.lc.blocks}b"
-              f"{'*' if self.lc.writes_enabled else ''}]"
-              f"  aFB {self.long.last_a_fb:+.2f}")
+              f"  cam[{self.lc.blocks}b "
+              f"{'LIVE' if self.calib_live else 'shdw'}"
+              + (f" p{lc_p:+.2f}" if lc_p is not None else "")
+              + f"]  aFB {self.long.last_a_fb:+.2f}")
         if self.desire_idx is not None:
             l3 += f"   >>> {DESIRE_NAME[self.desire_idx]} " \
                   f"({self.desire_until - time.monotonic():.1f}s)"
         return [l1, l2, l3]
+
+
+def draw_charts(canvas: np.ndarray, app: App) -> None:
+    """Model-wants (orange) vs car-does (green) sparklines, last ~15 s,
+    stacked top-right over the camera view. The 'is it the model or is
+    it the controls' question in one glance: traces apart = execution
+    error (controls); traces together but misbehaving = the model
+    asked for it."""
+    panels = [
+        ("mph", "vT", "v", 2.237, 4.0),
+        ("m/s^2", "a", "aM", 1.0, 1.0),
+        ("curv x1000", "k", "kM", 1000.0, 2.0),
+    ]
+    W, H, M = 300, 80, 8
+    x1 = CAM_W - W - M
+    for i, (label, want_key, does_key, scale, min_span) in enumerate(panels):
+        y0 = M + i * (H + M)
+        want = np.array(app.chart[want_key], dtype=np.float64) * scale
+        does = np.array(app.chart[does_key], dtype=np.float64) * scale
+        roi = canvas[y0:y0 + H, x1:x1 + W]
+        roi[:] = (roi * 0.25).astype(np.uint8)
+        cv2.rectangle(canvas, (x1, y0), (x1 + W - 1, y0 + H - 1),
+                      (90, 90, 90), 1)
+        both = np.concatenate([want[~np.isnan(want)],
+                               does[~np.isnan(does)]])
+        if both.size < 2:
+            continue
+        lo, hi = float(both.min()), float(both.max())
+        mid, span = (lo + hi) / 2.0, max(hi - lo, min_span)
+        lo, hi = mid - span / 2.0, mid + span / 2.0
+
+        def ypix(val: float) -> int:
+            return y0 + 4 + int((H - 22) * (1.0 - (val - lo) / (hi - lo)))
+
+        if lo < 0.0 < hi:
+            yz = ypix(0.0)
+            cv2.line(canvas, (x1, yz), (x1 + W - 1, yz), (70, 70, 70), 1)
+        n = max(len(want), len(does))
+        for series, col in ((does, (90, 220, 120)), (want, (0, 170, 255))):
+            prev = None
+            for j, val in enumerate(series):
+                if np.isnan(val):
+                    prev = None
+                    continue
+                pt = (x1 + int(W * j / max(n - 1, 1)), ypix(float(val)))
+                if prev is not None:
+                    cv2.line(canvas, prev, pt, col, 1, cv2.LINE_AA)
+                prev = pt
+        wv = want[~np.isnan(want)]
+        dv = does[~np.isnan(does)]
+        txt = (f"{label}  want "
+               + (f"{wv[-1]:+.1f}" if wv.size else "--")
+               + f"  act " + (f"{dv[-1]:+.1f}" if dv.size else "--"))
+        cv2.putText(canvas, txt, (x1 + 6, y0 + H - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 170, 255), 1,
+                    cv2.LINE_AA)
 
 
 def main() -> int:
@@ -820,6 +981,8 @@ def main() -> int:
                 app.disengage(f"loop rate {app.hz:.0f} Hz")
 
             canvas[:CAM_H] = draw_overlay(bgr, d, app.calib)
+            if app.charts_on:
+                draw_charts(canvas, app)
             canvas[CAM_H:] = 24
             panel.draw(canvas)
             for i, line in enumerate(app.hud_lines(d, v_ego)):
@@ -867,6 +1030,10 @@ def main() -> int:
                 app.action("ai")
             elif key == ord("r"):
                 app.action("cal")
+            elif key == ord("v"):
+                app.action("cam")
+            elif key == ord("b"):
+                app.charts_on = not app.charts_on
             elif key == ord("-"):
                 app.action("spd_dn")
             elif key == ord("="):
@@ -880,6 +1047,11 @@ def main() -> int:
         try:
             if app.lp.session_samples > 0:
                 app.lp.save()
+        except Exception:
+            pass
+        try:
+            if app._log_f is not None:
+                app._log_f.close()
         except Exception:
             pass
         app.world.apply(0.0, 0.0, 0.0)

@@ -207,6 +207,11 @@ class LiveCalib:
         # State.
         self.cal_status = CalStatus.UNCALIBRATED
         self._wrote_to_calib = False
+        # Shadow mode switch: when False the learner keeps estimating
+        # (blocks land, HUD shows what it WOULD apply) but never
+        # touches `calib` — the A/B toggle for "is livecalib helping
+        # or hurting". Not persisted; the app owns the choice.
+        self.apply = True
         # Persist-to-disk counter (every N committed blocks).
         self._blocks_since_save = 0
 
@@ -252,8 +257,10 @@ class LiveCalib:
     @property
     def writes_enabled(self) -> bool:
         """True once enough blocks have landed AND the smoothed rpy is
-        within validation bounds. Below that we don't touch `calib`."""
+        within validation bounds. Below that we don't touch `calib`.
+        `self.apply = False` (shadow mode) blocks writes regardless."""
         return (WRITE_CALIBRATION
+                and self.apply
                 and self.cal_status == CalStatus.CALIBRATED)
 
     # ----- ingest -----

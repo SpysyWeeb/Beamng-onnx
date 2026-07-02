@@ -234,11 +234,16 @@ class ControllerConfig:
     # gentle stop-phase commands (-0.5..-1.2) fall into a phantom coast
     # gap at low speed and the brake never fires at the end of stops.
     pedal_cal_v: float = 18.0
-    # Stop-and-hold (openpilot's stopping state): below this speed with
-    # no go command, hold a constant brake — an automatic in D creeps
-    # through the stop line at zero pedal otherwise.
-    stop_hold_speed: float = 0.6
+    # Stopping state (openpilot LongControl 'stopping'): once the plan
+    # wants a stop and speed drops below stop_hold_speed, RAMP the
+    # brake up to stop_hold_brake over stop_brake_ramp_s and hold —
+    # an automatic in D creeps through the stop line at zero pedal
+    # otherwise. Entry speed must be ABOVE creep speed (~1 m/s) or a
+    # weakly-braked car settles into a permanent 2 mph creep just
+    # outside the gate (field report 2026-07-01).
+    stop_hold_speed: float = 1.5
     stop_hold_brake: float = 0.3
+    stop_brake_ramp_s: float = 1.0
     # Closed loop on MEASURED acceleration — openpilot's actual long
     # mechanism (controlsd runs a PID on a_target vs a_ego; it doesn't
     # "learn" gains, feedback adapts to the vehicle in real time).
@@ -248,9 +253,11 @@ class ControllerConfig:
     # GENTLE by necessity: this loop carries ~1 s of total delay
     # (setpoint history + two LPFs + pedal response) — at P=0.4 it
     # oscillated, shoving the command across the coast gap every few
-    # seconds (field report: 'gassing and braking over and over').
-    # 0.12 makes it a slow trim, all a loop this delayed can be.
-    accel_fb_p: float = 0.12
+    # seconds (field report: 'gassing and braking over and over');
+    # the 0.12 detune STILL cycled in the field. OFF by default until
+    # run logs show a steady-state error it would actually fix — the
+    # pedal tables + speed-I already cover drag and map residuals.
+    accel_fb_p: float = 0.0
     accel_fb_clip: float = 0.5
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
@@ -581,6 +588,7 @@ class LongitudinalController:
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
         self._was_moving = False
+        self._stop_brake = 0.0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -610,6 +618,7 @@ class LongitudinalController:
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
         self._was_moving = False
+        self._stop_brake = 0.0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -823,15 +832,24 @@ class LongitudinalController:
             bx = [x - bd[0] for x in bd]     # brake component, >= 0
             coast_decel_eff = bd[0] * vfrac
             self._was_moving = self._was_moving or v_ego > 2.0
-            if (self._was_moving and v_ego < cfg.stop_hold_speed
-                    and a_cmd < 0.1 and v_target < 1.0):
-                # Came to a stop while driving: hold against automatic
-                # creep. Releases the moment the plan wants speed again
-                # (v_target). NOT armed before the first movement —
-                # holding at engage-from-standstill deadlocks: the
-                # model sees a parked scene and plans zero forever
-                # (creep is what seeds a standstill launch).
-                throttle, brake = 0.0, cfg.stop_hold_brake
+            stopping = (self._was_moving and v_ego < cfg.stop_hold_speed
+                        and a_cmd < 0.2 and v_target < 1.0)
+            if not stopping:
+                self._stop_brake = 0.0
+            if stopping:
+                # Came to a stop while driving: ramp the brake up and
+                # hold against automatic creep (openpilot LongControl
+                # 'stopping' ramps to stopAccel the same way). Releases
+                # the moment the plan wants speed again (v_target).
+                # NOT armed before the first movement — holding at
+                # engage-from-standstill deadlocks: the model sees a
+                # parked scene and plans zero forever (creep is what
+                # seeds a standstill launch).
+                ramp = cfg.stop_hold_brake * dt / max(cfg.stop_brake_ramp_s,
+                                                      1e-3)
+                self._stop_brake = min(cfg.stop_hold_brake,
+                                       self._stop_brake + ramp)
+                throttle, brake = 0.0, self._stop_brake
             elif a_cmd + drag_eff >= 0.0:
                 throttle = float(np.clip(
                     np.interp(a_cmd + drag_eff, tx, tp), 0.0, 1.0))
