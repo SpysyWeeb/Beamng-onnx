@@ -59,7 +59,8 @@ from simsteer.core.supercombo import SupercomboModel
 from simsteer.ui.overlay import draw_overlay
 
 from beamng.world import (BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG,
-                          CAM_HEIGHT_M, CAM_LATERAL_SIGN)
+                          CAM_HEIGHT_M, CAM_LATERAL_SIGN, SPAWN_POS,
+                          SPAWN_ROT_QUAT)
 
 # ASCII only: cv2's Qt backend fails setMouseCallback ("NULL window
 # handler") when the window name contains non-ASCII (e.g. an em-dash).
@@ -69,14 +70,19 @@ PANEL_H = 96               # button strip + HUD height (px)
 DESIRE_HOLD_S = {1: 3.0, 2: 3.0, 3: 2.5, 4: 2.5}   # turn L/R, lane L/R
 DESIRE_NAME = {1: "TURN L", 2: "TURN R", 3: "LANE L", 4: "LANE R"}
 WARMUP_FRAMES = 100        # model context fill before engage allowed
-# Calibration = BeamNG's AI drives while LiveParams fits passively from
-# electrics steering_input (verified to reflect AI input). The AI stays
-# on the road — an open-loop scripted slalom did not (it fed the learner
-# rail-scraping garbage and produced wild fits). Two speeds, because at
-# a single speed the rack model's `a` and `b·v²` terms are collinear
-# and the split extrapolates wrong. (target_v m/s, duration s):
-CAL_PHASES = [(12.0, 40.0), (18.0, 45.0)]
-CAL_DURATION_S = sum(p[1] for p in CAL_PHASES)
+# Calibration v3: deterministic system-ID. Teleport to the straight
+# highway spawn, drive straight to CAL_V, apply short alternating
+# steering pulses, measure the yaw response through the model's pose,
+# and solve the rack ratio by least squares (through the origin —
+# FILTER_DIRECT is linear with b~0, measured). No BeamNG AI (drives
+# mid-road with tiny inputs -> poor excitation, fit differed run to
+# run) and no user. Alternating pulses keep net heading ~zero so the
+# car snakes around the lane instead of leaving the road.
+CAL_V = 8.0                      # m/s during pulses (drift ~ v^2 k)
+CAL_PULSES = [+0.05, -0.05, +0.09, -0.09, +0.13, -0.13]
+CAL_PULSE_S = 1.4                # per pulse
+CAL_PULSE_SETTLE_S = 0.5         # ignore samples while yaw settles
+CAL_DURATION_S = 4.0 + 15.0 + len(CAL_PULSES) * CAL_PULSE_S + 2.0
 
 
 class Telemetry(threading.Thread):
@@ -412,13 +418,42 @@ class App:
     def start_cal(self) -> None:
         if self.engaged:
             self.disengage("calibration")
+        if self.ai_on:
+            self.world.ai_disable()
+            self.ai_on = False
+        self.world.realistic_gearbox()
+        self.world.ensure_drive()
+        self.world.vehicle.teleport(SPAWN_POS, rot_quat=SPAWN_ROT_QUAT)
         self.cal_active = True
         self.cal_until = time.monotonic() + CAL_DURATION_S
-        self._cal_speed = CAL_PHASES[0][0]
-        self.world.ai_drive(self._cal_speed)
-        self.ai_on = True
-        self.set_banner("CAL: BeamNG AI drives, learner watches — hands off",
-                        4.0)
+        self._cal_phase = "settle"
+        self._cal_t0 = time.monotonic()
+        self._cal_samples: list[tuple[float, float]] = []
+        self.set_banner("CAL: scripted system-ID at spawn — hands off", 4.0)
+
+    def _cal_finish(self) -> None:
+        self.cal_active = False
+        self.world.apply(0.0, 0.0, 0.6)
+        n = len(self._cal_samples)
+        sw2 = sum(w * w for _, w in self._cal_samples)
+        if n < 40 or sw2 < 1e-5:
+            self.set_banner(f"CAL FAILED (n={n}) — fit unchanged, retry", 5.0)
+            return
+        # least squares through the origin: axis = a * wheel
+        a = sum(ax * w for ax, w in self._cal_samples) / sw2
+        if not (0.5 <= abs(a) <= 50.0):
+            self.set_banner(f"CAL FAILED (a={a:.2f} implausible) — retry", 5.0)
+            return
+        # Direct measurement outranks RLS: install the fit and mark it
+        # mature (freeze-level sample count) so online updates can't
+        # wander it the way the old AI-watching calibration could.
+        self.lp.x[:] = [a, 0.0, 0.0]
+        # safely past FREEZE_AFTER_SAMPLES (2000): at exactly 2000 one
+        # more RLS update slipped in and nudged a by 3%
+        self.lp.samples = 5000
+        self.lp.session_samples = 5000
+        self.lp.save()
+        self.set_banner(f"CAL done: a={a:+.2f} from {n} samples (frozen)", 5.0)
 
     # ---- per-frame control ----
 
@@ -439,27 +474,27 @@ class App:
         steer, thr, brk = 0.0, 0.0, 0.0
         commanded = None
         if self.cal_active:
-            if now >= self.cal_until:
-                self.cal_active = False
-                self.lp.save()
-                # AI keeps driving after cal (self.ai_on stays True) —
-                # engage() will take over from motion, no dead stop.
-                self.set_banner(
-                    f"CAL done: a={self.lp.a_linear:.2f} "
-                    f"b={self.lp.b_quad:.4f} "
-                    f"samples={self.lp.session_samples} "
-                    f"trusted={self.lp.trusted()}", 5.0)
-            else:
-                t = CAL_DURATION_S - self.cal_left_s
-                target_v, acc = CAL_PHASES[-1][0], 0.0
-                for pv, pd in CAL_PHASES:
-                    acc += pd
-                    if t < acc:
-                        target_v = pv
-                        break
-                if target_v != self._cal_speed:
-                    self._cal_speed = target_v
-                    self.world.vehicle.ai.set_speed(target_v, mode="limit")
+            phase_t = now - self._cal_t0
+            if self._cal_phase == "settle":
+                self.world.apply(0.0, 0.0, 0.2)   # post-teleport physics
+                if phase_t > 2.0:
+                    self._cal_phase, self._cal_t0 = "accel", now
+            elif self._cal_phase == "accel":
+                self.world.apply(0.0, 0.45, 0.0)
+                if v_ego >= CAL_V or phase_t > 15.0:
+                    self._cal_phase, self._cal_t0 = "pulse", now
+            elif self._cal_phase == "pulse":
+                i = int(phase_t // CAL_PULSE_S)
+                if i >= len(CAL_PULSES):
+                    self._cal_finish()
+                else:
+                    axis = CAL_PULSES[i]
+                    thr_c = 0.25 if v_ego < CAL_V else 0.05
+                    self.world.apply(axis, thr_c, 0.0)
+                    in_pulse = phase_t - i * CAL_PULSE_S
+                    if (in_pulse > CAL_PULSE_SETTLE_S and wheel is not None
+                            and v_ego > 4.0):
+                        self._cal_samples.append((axis, wheel))
         elif self.engaged:
             lane_change_cmd = desire_active and self.desire_idx in (3, 4)
             steer = self.lat.compute(decoded, v_ego,
@@ -477,9 +512,13 @@ class App:
             commanded = steer
 
         # Feed the learner: our command while we drive, the game's own
-        # steering input while a human / BeamNG AI drives (passive fit).
+        # steering input while a human / BeamNG AI drives (passive
+        # fit). Skipped during CAL — the system-ID computes its own
+        # fit and installs it wholesale.
         tel = self.tel.snapshot()
-        game_steer = commanded if commanded is not None else tel["steering_input"]
+        game_steer = (None if self.cal_active else
+                      (commanded if commanded is not None
+                       else tel["steering_input"]))
         self.lp.update(game_steer, v_ego, wheel, commanded_axis=game_steer)
 
         self.last_steer, self.last_thr, self.last_brk = steer, thr, brk
@@ -497,7 +536,12 @@ class App:
         l2 = (f"lanes {probs}  lead {lead_p:.2f}"
               + (f" @{self.long.last_lead_x:.0f}m" if self.long.last_lead_x < 500 else "")
               + f"  curv {self.lat.last_curvature:+.4f}"
-              + (f"  AEB!" if self.long.last_aeb else ""))
+              + f"  vT {min(self.long.last_v_target, 99)*2.237:3.0f}"
+              + f"  aT {self.long.last_a_target:+.1f}"
+              + (f"  corner@{self.long.last_corner_t:.0f}s"
+                 if self.long.last_v_safe_corner < self.long.last_v_target + 1
+                 else "")
+              + ("  AEB!" if self.long.last_aeb else ""))
         trust = "OK" if lp.trusted() else "COLD"
         l3 = (f"rack a={lp.a_linear:+.2f} b={lp.b_quad:+.4f} "
               f"n={max(lp.samples, lp.session_samples)} [{trust}]")
