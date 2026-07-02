@@ -62,3 +62,5 @@ debug/*_smoke.png
 .openpilot_*.py
 debug_out/
 controller_*.json
+calibration_*.json
+livecalib_state*.json
