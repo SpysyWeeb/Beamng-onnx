@@ -811,19 +811,15 @@ class App:
                 self.sender.submit(steer, thr, brk)
             commanded = steer
 
-        # Feed the rack learner ONLY from human/AI driving (passive
-        # fit: the game's own steering input vs resulting yaw —
-        # independent signals, well-posed). Engaged samples pair OUR
-        # command with a MODEL-derived wheel through the loop's lag:
-        # circular data that dragged a 2.0→0.71, →0.84, →1.27 across
-        # three separate sessions ('steering feels lazy'). While
-        # engaged, the CAL measurement owns the gain and the trim
-        # integrator owns residuals — openpilot's paramsd similarly
-        # learns from independent sensors, not its own commands.
+        # The rack fit is a MEASURED CONSTANT, not a live learner
+        # (user decision 2026-07-02, after the online RLS dragged the
+        # gain 2.0→0.71/0.84/1.27 across three sessions): the CAL
+        # system-ID is the only writer — like openpilot's per-car
+        # steering constants. No engaged-time learning (circular:
+        # our command × model-derived wheel through variable lag) and
+        # no manual-drive learning either. The trim integrator still
+        # nudges residuals while engaged, bounded and leaky.
         tel = self.tel.snapshot()
-        game_steer = (None if (self.cal_active or self.engaged) else
-                      tel["steering_input"])
-        self.lp.update(game_steer, v_ego, wheel, commanded_axis=game_steer)
 
         # Camera-pose learner runs on every frame (its own gates handle
         # speed/turning/uncertainty); commits into self.calib — which
