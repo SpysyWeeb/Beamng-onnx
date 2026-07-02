@@ -1,0 +1,127 @@
+"""Minimal BeamNG world: connect to a running BeamNG.tech instance, spawn a
+scenario with one vehicle and ONE wide camera, and poll frames/telemetry.
+
+Unlike a real comma device (two physical cameras) or the openpilot sim
+(two rendered sensors), SimSteer's preprocess derives both model views
+(narrow medmodel + wide sbigmodel) from a single source frame — so one
+camera render is all we need. The source must cover at least the wide
+view's ~59 deg HFOV; we render 100 deg so the narrow ~31 deg crop still
+maps ~516 source px onto the model's 512-wide input at 1664x832.
+
+BeamNG must already be running with the tech server:
+    bash launch_beamng.sh     (from this repo)
+"""
+
+from __future__ import annotations
+
+import math
+import time
+
+import numpy as np
+from beamngpy import BeamNGpy, Scenario, Vehicle
+from beamngpy.sensors import Camera, Electrics
+
+HOST = "127.0.0.1"
+PORT = 64256
+
+MAP = "west_coast_usa"
+VEHICLE_MODEL = "bastion"
+# Highway spawn, same map/pose the author has used for months of testing.
+SPAWN_POS = (-829.5, -499.0, 106.8)
+SPAWN_ROT_QUAT = (0.0, 0.0, -0.9272, 0.3746)
+
+# Camera mount relative to the vehicle (BeamNG vehicles face -Y):
+# roughly windshield-top, ~1.4 m above the road.
+CAM_POS = (0.0, -1.45, 1.38)
+CAM_DIR = (0.0, -1.0, 0.0)
+
+CAM_W, CAM_H = 1664, 832
+CAM_FOV_H_DEG = 100.0
+
+
+def fov_v_deg(fov_h_deg: float, w: int, h: int) -> float:
+    """Square pixels: tan(v/2) = tan(h/2) * H/W. beamngpy wants vertical."""
+    return math.degrees(2 * math.atan(
+        math.tan(math.radians(fov_h_deg) / 2) * h / w))
+
+
+class BeamNGOnnxWorld:
+    def __init__(self, host: str = HOST, port: int = PORT):
+        print(f"[world] connecting to BeamNG at {host}:{port} ...", flush=True)
+        self.bng = BeamNGpy(host, port)
+        self.bng.open(launch=False)
+
+        print(f"[world] loading scenario {MAP} ...", flush=True)
+        scenario = Scenario(MAP, "beamng_onnx")
+        self.vehicle = Vehicle("ego", model=VEHICLE_MODEL, license="ONNX")
+        scenario.add_vehicle(self.vehicle, pos=SPAWN_POS, rot_quat=SPAWN_ROT_QUAT)
+        scenario.make(self.bng)
+        self.bng.scenario.load(scenario)
+        self.bng.scenario.start()
+
+        self.vehicle.sensors.attach("electrics", Electrics())
+
+        self.camera = Camera(
+            "onnxcam", self.bng, self.vehicle,
+            requested_update_time=0.05,  # 20 Hz — never render more than we consume
+            pos=CAM_POS, dir=CAM_DIR, up=(0, 0, 1),
+            field_of_view_y=fov_v_deg(CAM_FOV_H_DEG, CAM_W, CAM_H),
+            resolution=(CAM_W, CAM_H),
+            near_far_planes=(0.1, 1000.0),
+            is_render_colours=True,
+            is_render_annotations=False,
+            is_render_depth=False,
+        )
+        print("[world] scenario live, camera attached.", flush=True)
+
+    # ---- frames ----
+
+    def poll_bgr(self) -> np.ndarray | None:
+        """Latest camera frame as HxWx3 BGR uint8, or None if not ready."""
+        data = self.camera.poll()
+        colour = data.get("colour") if isinstance(data, dict) else None
+        if colour is None:
+            return None
+        img = np.asarray(colour)
+        if img.ndim != 3:
+            return None
+        if img.shape[2] == 4:
+            img = img[:, :, :3]
+        # beamngpy returns RGB(A); simsteer's pipeline expects BGR (cv2 land)
+        return img[:, :, ::-1].copy()
+
+    # ---- telemetry ----
+
+    def poll_telemetry(self) -> dict:
+        """v_ego (m/s), steering wheel angle (deg), from Electrics."""
+        self.vehicle.sensors.poll()
+        el = self.vehicle.sensors["electrics"]
+        return {
+            "v_ego": float(el.get("wheelspeed", 0.0)),
+            "steering_deg": float(el.get("steering", 0.0)),
+        }
+
+    # ---- control (M3) ----
+
+    def apply(self, steering: float, throttle: float, brake: float) -> None:
+        self.vehicle.control(steering=float(np.clip(steering, -1, 1)),
+                             throttle=float(np.clip(throttle, 0, 1)),
+                             brake=float(np.clip(brake, 0, 1)))
+
+    # ---- misc ----
+
+    def ai_drive(self, speed_ms: float = 25.0) -> None:
+        """Let BeamNG's AI drive (useful for feeding the model motion
+        without closing the loop)."""
+        self.vehicle.ai.set_mode("span")
+        self.vehicle.ai.set_speed(speed_ms, mode="limit")
+
+    def close(self) -> None:
+        try:
+            self.camera.remove()
+        except Exception:
+            pass
+        try:
+            self.bng.disconnect()
+        except Exception:
+            pass
