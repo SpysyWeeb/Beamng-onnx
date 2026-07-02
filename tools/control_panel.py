@@ -263,7 +263,7 @@ class App:
 
         cfg = ControllerConfig()
         cfg.wheelbase_m = WHEELBASE_M
-        cfg.max_speed_mps = 25.0
+        cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
         self.cfg = cfg
         self.lp = LiveParams(game="beamng")
         self.lat = LateralController(cfg, live_params=self.lp)
@@ -339,12 +339,14 @@ class App:
             self.set_banner(f"BeamNG AI {'ON' if self.ai_on else 'OFF'}")
         elif key == "cal":
             self.start_cal()
-        elif key == "spd_dn":
-            self.cfg.max_speed_mps = max(5.0, self.cfg.max_speed_mps - 2.5)
-            self.set_banner(f"max speed {self.cfg.max_speed_mps*2.237:.0f} mph")
-        elif key == "spd_up":
-            self.cfg.max_speed_mps = min(45.0, self.cfg.max_speed_mps + 2.5)
-            self.set_banner(f"max speed {self.cfg.max_speed_mps*2.237:.0f} mph")
+        elif key in ("spd_dn", "spd_up"):
+            # step in whole-5-mph notches (55, 60, 65 ...) like a real
+            # cruise stalk; snap first in case the cap started off-grid
+            step = -5.0 if key == "spd_dn" else 5.0
+            mph = round(self.cfg.max_speed_mps * 2.237 / 5.0) * 5.0 + step
+            mph = min(100.0, max(10.0, mph))
+            self.cfg.max_speed_mps = mph / 2.237
+            self.set_banner(f"max speed {mph:.0f} mph")
 
     def engage(self, forced: bool = False) -> None:
         if self.ai_on:
