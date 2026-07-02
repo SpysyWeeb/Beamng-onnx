@@ -246,8 +246,8 @@ class ControllerConfig:
     # the line (run logs: 7 launches, a_meas peaked 3.8-4.15 vs a
     # commanded ~1.9 at 0.19 throttle). Scale the throttle DEMAND by
     # this factor at standstill, fading to 1.0 by launch_thr_full_v.
-    launch_thr_scale: float = 0.5
-    launch_thr_full_v: float = 6.0
+    launch_thr_scale: float = 0.4
+    launch_thr_full_v: float = 8.0
     # Stopping state (openpilot LongControl 'stopping'): once the plan
     # wants a stop and speed drops below stop_hold_speed, RAMP the
     # brake up to stop_hold_brake over stop_brake_ramp_s and hold —
@@ -275,7 +275,10 @@ class ControllerConfig:
     # defaults to 0.
     accel_fb_p: float = 0.0
     accel_fb_i: float = 0.4
-    accel_fb_clip: float = 0.8
+    # field: mid-range shortfall needed MORE than 0.8 (fb pinned at
+    # the clip with delivery still 0.68) — the table's engine promise
+    # is that far off in high gears.
+    accel_fb_clip: float = 1.2
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
