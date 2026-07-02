@@ -124,8 +124,12 @@ class ControllerConfig:
     # lat_accel_max_mps2 clamps commanded lateral g (the "what the
     # vehicle is capable of" bound comma assigns per car). Set
     # lat_jerk_max_mps3 to None to fall back to the legacy table.
-    lat_jerk_max_mps3: float | None = 5.0
-    lat_accel_max_mps2: float = 3.0
+    # openpilot's road values are 5.0 / 3.0; those are tuned for a
+    # real EPS and passenger comfort, and 3.0 lateral g is exactly why
+    # real openpilot balks at sharp city corners. The sim car grips
+    # ~8+ m/s^2, so run "strong car" bounds: 2x wheel rate, 4.5 g cap.
+    lat_jerk_max_mps3: float | None = 10.0
+    lat_accel_max_mps2: float = 4.5
 
     # Speed-dependent steering response (variable-ratio rack in ETS2
     # and most games) is handled inside LiveParams now — it fits a
@@ -232,9 +236,8 @@ class ControllerConfig:
     # comfortable, 4-5 is firm, 6+ is aggressive. Set 0 to disable.
     # MUST NOT exceed lat_accel_max_mps2 (the ISO clamp on commanded
     # curvature): if long carries more speed into a bend than lateral
-    # is allowed to use, the car understeers off the curve. Matched at
-    # 3.0.
-    max_lat_accel_mps2: float = 3.0
+    # is allowed to use, the car understeers off the curve. Matched.
+    max_lat_accel_mps2: float = 4.5
     # How far ahead in the plan to scan for the tightest upcoming
     # corner. Should be ≥ long_anticipation_s. Default 6 s covers
     # ~150 m at 25 m/s and ~200 m at 33 m/s — long enough to register
