@@ -210,6 +210,18 @@ class ControllerConfig:
     max_accel_mps2: float = 4.0
     # Same on the brake side. Full brake in a game car is ~8-10 m/s^2.
     max_decel_mps2: float = 8.0
+    # Calibrated pedal maps (CAL's longitudinal system-ID): measured
+    # (accel, pedal) points, inverted by interpolation. Tables, not a
+    # parametric fit, because the measured brake response SATURATES
+    # (0.3 pedal ~ 5 m/s^2, 0.6 ~ 8, 1.0 no more) — a line either
+    # over-brakes 2x or its intercept swallows the ISO command range.
+    #   pedal_thr_map: ascending [[accel_mps2, throttle], ...]; first
+    #     point is coast (zero pedal, negative accel from drag).
+    #   pedal_brk_map: ascending [[decel_mps2, brake], ...]; first
+    #     point is coast decel at zero pedal.
+    # None -> legacy scale-only mapping above.
+    pedal_thr_map: list | None = None
+    pedal_brk_map: list | None = None
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
@@ -715,11 +727,28 @@ class LongitudinalController:
             a_cmd = -cfg.max_decel_mps2
             self._a_cmd_smooth = a_cmd
 
-        # Anti-hunt deadband on the BRAKE side only: between
-        # -deadband and 0 we coast. The throttle side must NOT be
-        # deadbanded — cruising needs small sustained throttle, and
-        # zeroing it forced a droop/limit-cycle below the set speed.
-        if a_cmd > 0:
+        # Pedal mapping. Calibrated affine inversion when CAL has
+        # measured the car (note the coast gap: zero pedal already
+        # gives -pedal_thr_off from drag, the lightest brake touch
+        # gives -pedal_brk_off from bite; commands between coast).
+        # Legacy scale-only mapping otherwise, with the anti-hunt
+        # deadband on the BRAKE side only — cruising needs small
+        # sustained throttle, zeroing it caused a droop/limit-cycle.
+        if cfg.pedal_thr_map and cfg.pedal_brk_map:
+            ta = [p[0] for p in cfg.pedal_thr_map]
+            tp = [p[1] for p in cfg.pedal_thr_map]
+            bd = [p[0] for p in cfg.pedal_brk_map]
+            bp = [p[1] for p in cfg.pedal_brk_map]
+            coast_a = ta[0]      # accel with zero pedal (negative)
+            if a_cmd >= coast_a:
+                throttle = float(np.clip(np.interp(a_cmd, ta, tp), 0.0, 1.0))
+                brake = 0.0
+            elif -a_cmd <= bd[0] + cfg.accel_deadband_mps2:
+                throttle, brake = 0.0, 0.0   # coast already does this
+            else:
+                throttle = 0.0
+                brake = float(np.clip(np.interp(-a_cmd, bd, bp), 0.0, 1.0))
+        elif a_cmd > 0:
             throttle = min(1.0, a_cmd / max(cfg.max_accel_mps2, 1e-3))
             brake = 0.0
         elif a_cmd > -cfg.accel_deadband_mps2:

@@ -115,7 +115,10 @@ def main() -> int:
                 print(f"  t={args.seconds - (deadline - time.monotonic()):5.0f}s"
                       f"  v={v:5.1f} m/s  steer={app.last_steer:+.2f}"
                       f"  off={offs[-1]:+.2f} m"
-                      f"  lanes={np.round(d.lane_lines_prob[1:3], 2)}",
+                      f"  lanes={np.round(d.lane_lines_prob[1:3], 2)}"
+                      f"  thr={app.last_thr:.2f} brk={app.last_brk:.2f}"
+                      f"  vT={app.long.last_v_target*2.237:3.0f}mph"
+                      f"  aT={app.long.last_a_target:+.1f}",
                       flush=True)
         app.disengage("test end")
 

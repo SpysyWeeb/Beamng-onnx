@@ -82,7 +82,29 @@ CAL_V = 8.0                      # m/s during pulses (drift ~ v^2 k)
 CAL_PULSES = [+0.05, -0.05, +0.09, -0.09, +0.13, -0.13]
 CAL_PULSE_S = 1.4                # per pulse
 CAL_PULSE_SETTLE_S = 0.5         # ignore samples while yaw settles
-CAL_DURATION_S = 4.0 + 15.0 + len(CAL_PULSES) * CAL_PULSE_S + 2.0
+# Longitudinal system-ID: pedal steps on the straight, measure achieved
+# accel (wheelspeed slope) and fit the real pedal->accel gains so a
+# commanded 2 m/s^2 actually produces 2 m/s^2. (kind, pedal, duration).
+# "rec" = recover speed between brake steps (advances early at 18 m/s).
+# "slow" drops back to ~9 m/s between throttle steps so each measures
+# from the same speed (at 20+ m/s the engine is power-limited and the
+# full-throttle point reads LOW, corrupting the fit). "coast" measures
+# pedals-free drag+engine-braking so the brake fit is net of it —
+# conflating drag into the brake intercept made the coast gap swallow
+# the whole ISO command range and the service brakes never fired.
+CAL_LONG_SCRIPT = [
+    ("thr", 0.35, 1.6), ("slow", 0.0, 5.0),
+    ("thr", 0.70, 1.6), ("slow", 0.0, 5.0),
+    ("thr", 1.00, 1.6),
+    ("rec", 0.0, 6.0),
+    ("coast", 0.0, 1.8),
+    ("brk", 0.30, 1.2), ("rec", 0.0, 6.0),
+    ("brk", 0.60, 1.2), ("rec", 0.0, 6.0),
+    ("brk", 1.00, 2.5),
+]
+CAL_LONG_SETTLE_S = 0.4          # pedal/weight-transfer settling per step
+CAL_DURATION_S = (4.0 + 15.0 + len(CAL_PULSES) * CAL_PULSE_S
+                  + sum(s[2] for s in CAL_LONG_SCRIPT) + 2.0)
 
 
 class Telemetry(threading.Thread):
@@ -431,6 +453,9 @@ class App:
         self._cal_t0 = time.monotonic()
         self._cal_samples: list[tuple[float, float]] = []
         self._cal_series: list[tuple[float, float]] = []   # (axis, wheel)/frame
+        self._cal_long: list[tuple[str, float, float]] = []  # (kind, pedal, accel)
+        self._cal_long_i = 0
+        self._cal_vt: list[tuple[float, float]] = []       # (t, v) per step
         self.set_banner("CAL: scripted system-ID at spawn — hands off", 4.0)
 
     def _cal_finish(self) -> None:
@@ -477,11 +502,62 @@ class App:
                     best_c, lag_s = c, k * 0.05
             self.cfg.lookahead_s = float(np.clip(
                 lag_s + self.cfg.steer_smooth_s, 0.10, 0.60))
-            self.cfg.save(game="beamng")
+
+        # Pedal-map fit: achieved accel vs pedal position, slope with
+        # intercept (the intercept absorbs drag/rolling resistance —
+        # the speed-I trim covers that online). Sets the scales so a
+        # commanded m/s^2 produces that m/s^2 in the game.
+        long_msg = ""
+        print(f"[cal] long steps (kind, pedal, dv/dt): "
+              f"{[(k, p, round(s, 2)) for k, p, s in self._cal_long]}",
+              flush=True)
+        thr = [(p, s) for k, p, s in self._cal_long if k == "thr"]
+        brk = [(p, -s) for k, p, s in self._cal_long if k == "brk"]
+        coast = [-s for k, _, s in self._cal_long if k == "coast"]
+        # pedals-free deceleration (drag + engine braking) — the brake
+        # fit must be net of this or its intercept swallows the whole
+        # ISO command range as "coast gap"
+        d_coast = float(np.clip(np.mean(coast), 0.3, 3.0)) if coast else 1.5
+        # Interpolation tables (measured points, monotonic-filtered):
+        # the brake response saturates, so no parametric fit — the
+        # curve IS the calibration.
+        if len(thr) >= 2:
+            pts = [(-d_coast, 0.0)] + sorted(
+                (float(s), float(p)) for p, s in thr)
+            table = [pts[0]]
+            for a_m, p_m in pts[1:]:
+                if a_m > table[-1][0] + 0.05:
+                    table.append((a_m, p_m))
+            if len(table) >= 3:
+                self.cfg.pedal_thr_map = [list(x) for x in table]
+                self.cfg.max_accel_mps2 = table[-1][0]   # HUD/legacy
+                long_msg += f"  thr[{table[-1][0]:.1f}max]"
+        if len(brk) >= 2:
+            pts = [(d_coast, 0.0)] + sorted(
+                (float(d), float(p)) for p, d in brk)
+            table = [pts[0]]
+            for d_m, p_m in pts[1:]:
+                if d_m > table[-1][0] + 0.05:
+                    table.append((d_m, p_m))
+            if len(table) >= 3:
+                # terminal point: anything beyond the strongest
+                # measured decel gets full pedal (AEB lands here)
+                table.append((table[-1][0] + 3.0, 1.0))
+                self.cfg.pedal_brk_map = [list(x) for x in table]
+                self.cfg.max_decel_mps2 = table[-2][0]
+                long_msg += (f"  brk[{table[-2][0]:.1f}max"
+                             f" coast {d_coast:.1f}]")
+        # Execute the plan at an openpilot-like horizon. The old 1.0 s
+        # anticipation applied the deceleration planned for 1.3 s in
+        # the future NOW — the whole stop profile ran early and the car
+        # halted metres before the line. Corner braking keeps its own
+        # 6 s scan horizon; this only times plan-following.
+        self.cfg.long_anticipation_s = 0.3
+        self.cfg.save(game="beamng")
 
         self.set_banner(f"CAL done: a={a:+.2f} ({n} samples, frozen)  "
-                        f"lag={lag_s*1000:.0f}ms -> lookahead "
-                        f"{self.cfg.lookahead_s:.2f}s", 6.0)
+                        f"lag={lag_s*1000:.0f}ms lookahead "
+                        f"{self.cfg.lookahead_s:.2f}s{long_msg}", 6.0)
 
     # ---- per-frame control ----
 
@@ -514,7 +590,9 @@ class App:
             elif self._cal_phase == "pulse":
                 i = int(phase_t // CAL_PULSE_S)
                 if i >= len(CAL_PULSES):
-                    self._cal_finish()
+                    self._cal_phase, self._cal_t0 = "long", now
+                    self._cal_long_i = 0
+                    self._cal_vt = []
                 else:
                     axis = CAL_PULSES[i]
                     thr_c = 0.25 if v_ego < CAL_V else 0.05
@@ -527,6 +605,36 @@ class App:
                         if in_pulse > CAL_PULSE_SETTLE_S:
                             # settled samples only for the gain fit
                             self._cal_samples.append((axis, wheel))
+            elif self._cal_phase == "long":
+                if self._cal_long_i >= len(CAL_LONG_SCRIPT):
+                    self._cal_finish()
+                else:
+                    kind, pedal, dur = CAL_LONG_SCRIPT[self._cal_long_i]
+                    if kind == "thr":
+                        self.world.apply(0.0, pedal, 0.0)
+                    elif kind == "brk":
+                        self.world.apply(0.0, 0.0, pedal)
+                    elif kind == "coast":
+                        self.world.apply(0.0, 0.0, 0.0)
+                    elif kind == "slow":   # back to thr-step start speed
+                        self.world.apply(0.0, 0.0, 0.4)
+                    else:   # rec: recover speed between brake steps
+                        self.world.apply(0.0, 0.7, 0.0)
+                    measured = kind in ("thr", "brk", "coast")
+                    if measured and phase_t > CAL_LONG_SETTLE_S:
+                        self._cal_vt.append((now, v_ego))
+                    done = (phase_t > dur
+                            or (kind == "rec" and v_ego >= 18.0)
+                            or (kind == "slow" and v_ego <= 9.0))
+                    if done:
+                        if measured and len(self._cal_vt) >= 6:
+                            ts = np.array([p[0] for p in self._cal_vt])
+                            vs = np.array([p[1] for p in self._cal_vt])
+                            slope = float(np.polyfit(ts - ts[0], vs, 1)[0])
+                            self._cal_long.append((kind, pedal, slope))
+                        self._cal_long_i += 1
+                        self._cal_t0 = now
+                        self._cal_vt = []
         elif self.engaged:
             lane_change_cmd = desire_active and self.desire_idx in (3, 4)
             steer = self.lat.compute(decoded, v_ego,
