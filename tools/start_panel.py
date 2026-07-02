@@ -168,6 +168,7 @@ class StartPanel:
         self.model = cfg.get("model") or DEFAULT_MODEL
         if not os.path.isfile(self.model):
             self.model = self.models[0]
+        self._cfg_prefix = cfg.get("panel_cmd_prefix")
 
         self.focus: str | None = None      # "path" while typing
         self.open_dropdown: str | None = None
@@ -180,10 +181,12 @@ class StartPanel:
     # ---- persistence ----
 
     def save(self) -> None:
-        json.dump({"beamng_path": self.path, "tech_key": self.tech_key,
-                   "map": self.map, "vehicle": self.vehicle,
-                   "model": self.model},
-                  open(CONFIG_PATH, "w"), indent=2)
+        data = {"beamng_path": self.path, "tech_key": self.tech_key,
+                "map": self.map, "vehicle": self.vehicle,
+                "model": self.model}
+        if self._cfg_prefix:
+            data["panel_cmd_prefix"] = self._cfg_prefix
+        json.dump(data, open(CONFIG_PATH, "w"), indent=2)
 
     def log(self, msg: str) -> None:
         self.status.append(msg)
@@ -257,20 +260,25 @@ class StartPanel:
                     return
                 self.log(f"found vehicle(s): {list(vehicles)} - "
                          "hooking the current car.")
-            cmd = [sys.executable,
-                   os.path.join(ROOT, "tools", "control_panel.py"),
-                   "--map", self.map, "--vehicle", self.vehicle]
+            args = ["--map", self.map, "--vehicle", self.vehicle]
             if attach:
-                cmd.append("--attach")
+                args.append("--attach")
             if os.path.realpath(self.model) != os.path.realpath(
                     DEFAULT_MODEL):
                 if not os.path.isfile(self.model):
                     self.log(f"model file missing: {self.model}")
                     return
-                cmd += ["--model", self.model]
+                args += ["--model", self.model]
+            # `panel_cmd_prefix` in launcher_beamng.json reroutes the
+            # control-panel spawn (e.g. into a distrobox where the
+            # ROCm runtime lives); our args are appended verbatim.
+            # Default: this same python, this repo.
+            prefix = self._cfg_prefix or [
+                sys.executable,
+                os.path.join(ROOT, "tools", "control_panel.py")]
             env = dict(os.environ)
             env.setdefault("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
-            subprocess.Popen(cmd, cwd=ROOT, env=env)
+            subprocess.Popen(prefix + args, cwd=ROOT, env=env)
             self.log("control panel launching - its window appears "
                      "once the scenario loads.")
             self.log("this launcher can be closed (ESC).")
