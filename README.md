@@ -80,7 +80,7 @@ repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
 **Easiest path — the start panel:**
 
 ```bash
-python tools/start_panel.py
+./start.sh          # (or: python tools/start_panel.py)
 ```
 
 It auto-detects your BeamNG install and tech.key, lets you pick a map
