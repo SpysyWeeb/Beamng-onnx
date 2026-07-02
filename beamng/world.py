@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import time
 
+import cv2
 import numpy as np
 from beamngpy import BeamNGpy, Scenario, Vehicle
 from beamngpy.sensors import Camera, Electrics
@@ -83,24 +84,34 @@ class BeamNGOnnxWorld:
             is_render_colours=True,
             is_render_annotations=False,
             is_render_depth=False,
+            # M2: BeamNG writes frames into a shared-memory buffer we read
+            # with stream() — no per-frame TCP round-trip like poll().
+            is_streaming=True,
+            is_using_shared_memory=True,
         )
-        print("[world] scenario live, camera attached.", flush=True)
+        print("[world] scenario live, camera attached (shmem streaming).",
+              flush=True)
 
     # ---- frames ----
 
     def poll_bgr(self) -> np.ndarray | None:
-        """Latest camera frame as HxWx3 BGR uint8, or None if not ready."""
-        data = self.camera.poll()
-        colour = data.get("colour") if isinstance(data, dict) else None
-        if colour is None:
+        """Latest camera frame as HxWx3 BGR uint8, or None if not ready.
+
+        stream_raw() reads the shmem bytes with no PIL decode — 0.13 ms vs
+        12 ms for stream()/poll(). cvtColor both drops alpha and swaps
+        RGB->BGR (simsteer's pipeline is cv2 land) in one SIMD pass.
+        """
+        raw = self.camera.stream_raw()
+        buf = raw.get("colour") if isinstance(raw, dict) else None
+        if buf is None or len(buf) == 0:
             return None
-        img = np.asarray(colour)
-        if img.ndim != 3:
+        arr = np.frombuffer(buf, dtype=np.uint8)
+        ch = arr.size // (CAM_W * CAM_H)
+        if ch not in (3, 4) or arr.size != CAM_W * CAM_H * ch:
             return None
-        if img.shape[2] == 4:
-            img = img[:, :, :3]
-        # beamngpy returns RGB(A); simsteer's pipeline expects BGR (cv2 land)
-        return img[:, :, ::-1].copy()
+        img = arr.reshape(CAM_H, CAM_W, ch)
+        code = cv2.COLOR_RGBA2BGR if ch == 4 else cv2.COLOR_RGB2BGR
+        return cv2.cvtColor(img, code)
 
     # ---- telemetry ----
 
@@ -131,8 +142,12 @@ class BeamNGOnnxWorld:
     def close(self) -> None:
         try:
             self.camera.remove()
-        except Exception:
-            pass
+        except Exception as exc:
+            # A failed remove LEAKS a full-res streaming camera that keeps
+            # rendering forever (bridge project hit this as a GPU-load
+            # runaway) — make it loud.
+            print(f"[world] WARNING: camera remove FAILED ({exc}) — "
+                  f"old camera may still be rendering!", flush=True)
         try:
             self.bng.disconnect()
         except Exception:
