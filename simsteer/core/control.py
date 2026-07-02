@@ -213,6 +213,12 @@ class ControllerConfig:
     # ramping the brake in, so post-AEB recovery isn't sluggish.
     accel_jerk_down_mps3: float = 2.5
     accel_jerk_up_mps3: float = 4.0
+    # First-order smoothing on the accel command — the exact mechanism
+    # openpilot uses (modeld LONG_SMOOTH_SECONDS = 0.3): the plan's
+    # frame-to-frame accel fluctuations get filtered before actuation,
+    # so the brake pedal is heavy and deliberate instead of twitchy.
+    # 0 disables. AEB bypasses it.
+    long_smooth_s: float = 0.3
     # P term on velocity error (m/s^2 commanded per m/s of error). Keeps
     # the loop tracking the plan's velocity when the FF accel alone
     # under/overshoots. Small by design — the FF carries most of the
@@ -501,6 +507,7 @@ class LongitudinalController:
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
+        self._a_cmd_smooth = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         # Corner-anticipation diagnostics for the HUD.
@@ -519,6 +526,7 @@ class LongitudinalController:
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
+        self._a_cmd_smooth = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_v_safe_corner = float("inf")
@@ -629,13 +637,20 @@ class LongitudinalController:
         if v_ego >= cfg.max_speed_mps and a_cmd > 0:
             a_cmd = 0.0
 
-        # ISO comfort clamp + jerk rate-limit (openpilot-style). The
-        # e2e plan can request violent accelerations; clamp the command
-        # and ramp it so pedals move deliberately. dt is the 20 Hz
-        # frame (DT_MDL) — callers don't measure it for us.
+        # ISO comfort clamp + smoothing + jerk rate-limit (openpilot-
+        # style). The e2e plan can request violent accelerations; clamp
+        # the command, low-pass it, and ramp it so pedals move
+        # deliberately. dt is the 20 Hz frame (DT_MDL) — callers don't
+        # measure it for us.
         a_cmd = float(np.clip(a_cmd, cfg.accel_cmd_min_mps2,
                               cfg.accel_cmd_max_mps2))
         dt = 0.05
+        if cfg.long_smooth_s > 0:
+            alpha = 1.0 - math.exp(-dt / cfg.long_smooth_s)
+            self._a_cmd_smooth += alpha * (a_cmd - self._a_cmd_smooth)
+            a_cmd = self._a_cmd_smooth
+        else:
+            self._a_cmd_smooth = a_cmd
         a_cmd = float(np.clip(
             a_cmd,
             self.last_a_cmd - cfg.accel_jerk_down_mps3 * dt,
@@ -644,6 +659,7 @@ class LongitudinalController:
         # AEB override — full brake, exempt from the comfort limits.
         if aeb:
             a_cmd = -cfg.max_decel_mps2
+            self._a_cmd_smooth = a_cmd
 
         # Deadband around zero so we don't ping-pong between throttle
         # and brake when the model is happy with current speed.
