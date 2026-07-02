@@ -42,11 +42,19 @@ chase cam) while it drives, or drive a second vehicle around it.
 
 - **BeamNG.tech** (research license — the `Camera` sensor needs it),
   launched with the tech server: `bash launch_beamng.sh`
-- Linux. Developed on Bazzite (host runs the game) with the Python
-  side in an Ubuntu 24.04 distrobox.
-- Python 3.12 venv (use `uv venv` — plain venv comes up pip-less in
-  some containers): `numpy`, `opencv-python`, `beamngpy`, and
-  `onnxruntime` (CPU) or `onnxruntime-rocm` (see below).
+- Any Linux distro — **no container required**. Python 3.12 venv:
+
+  ```bash
+  uv venv .venv --python 3.12        # or python3 -m venv .venv
+  uv pip install -r requirements.txt
+  ```
+
+  CPU inference runs the full pipeline at ~60 Hz, 3× the 20 Hz it
+  needs — the GPU section below is optional.
+
+  (This repo is developed on Bazzite with the Python env in a
+  distrobox, purely because that's an easy place to put the ROCm
+  libraries on an immutable OS. Dev-machine detail, not a dependency.)
 
 ### Models (not in the repo)
 
