@@ -390,6 +390,7 @@ class LateralController:
         self.last_curvature = 0.0
         self.last_target_wheel = 0.0
         self.last_axis = 0.0
+        self.last_axis_target = 0.0
         self.last_in_lane_change = False
         self.last_authority = 1.0
         # Previous-frame desired curvature (pre-authority, pre-scale).
@@ -415,6 +416,7 @@ class LateralController:
         self.last_curvature = 0.0
         self.last_target_wheel = 0.0
         self.last_axis = 0.0
+        self.last_axis_target = 0.0
         self.last_in_lane_change = False
         self.last_authority = 1.0
         self.last_desired_k_raw = 0.0
@@ -436,6 +438,7 @@ class LateralController:
             self.last_curvature = 0.0
             self.last_target_wheel = 0.0
             self.last_axis = 0.0
+            self.last_axis_target = 0.0
             self.last_in_lane_change = False
             self.last_authority = 0.0
             self._axis_smooth = 0.0
@@ -549,6 +552,7 @@ class LateralController:
         # the dynamic auto-knob. Both stack additively on top of FF.
         axis = axis_ff + self.axis_trim_state + cfg.axis_bias
         axis = max(-cfg.steer_max, min(cfg.steer_max, axis))
+        self.last_axis_target = axis   # pre-EPS-filter (telemetry TGT %)
         # Emulated EPS: first-order low-pass on the final axis. The
         # direct game input has no actuator dynamics, so without this
         # every 20 Hz plan flicker reaches the wheel raw.

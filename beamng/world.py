@@ -132,6 +132,8 @@ class BeamNGOnnxWorld:
             "v_ego": float(el.get("wheelspeed", 0.0)),
             "steering_deg": float(el.get("steering", 0.0)),
             "steering_input": float(el.get("steering_input", 0.0)),
+            "throttle_input": float(el.get("throttle_input", 0.0)),
+            "brake_input": float(el.get("brake_input", 0.0)),
             "heading_rad": math.atan2(float(d[1]), float(d[0])),
             "pos": tuple(st.get("pos", (0.0, 0.0, 0.0))),
         }

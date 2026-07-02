@@ -68,7 +68,24 @@ from beamng.world import (BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG,
 # handler") when the window name contains non-ASCII (e.g. an em-dash).
 WINDOW = "Beamng-onnx control panel"
 WHEELBASE_M = 2.9          # bastion-ish; constant error folds into LiveParams
-PANEL_H = 96               # button strip + HUD height (px)
+# Vertical-rectangle layout (op-replay-clipper style): model view on
+# top, telemetry panel below, buttons + HUD at the bottom.
+UI_W = 760
+CAM_VIEW_H = UI_W * CAM_H // CAM_W      # camera aspect preserved
+TELEM_H = 704
+BTN_ROW_H = 42
+HUD_H = 84
+TOTAL_H = CAM_VIEW_H + TELEM_H + 2 * BTN_ROW_H + HUD_H
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+# telemetry palette (BGR) — dark navy like the reference UI
+C_BG = (26, 18, 10)
+C_LABEL = (150, 138, 118)
+C_WHITE = (235, 240, 240)
+C_BLUE = (232, 163, 74)     # desired (lat accel)
+C_GREEN = (126, 209, 126)   # actual / measured
+C_YELLOW = (74, 192, 232)   # target steer %
+C_ORANGE = (74, 130, 232)   # applied steer %
+C_DIM = (60, 50, 38)
 DESIRE_HOLD_S = {1: 3.0, 2: 3.0, 3: 2.5, 4: 2.5}   # turn L/R, lane L/R
 DESIRE_NAME = {1: "TURN L", 2: "TURN R", 3: "LANE L", 4: "LANE R"}
 WARMUP_FRAMES = 100        # model context fill before engage allowed
@@ -118,6 +135,7 @@ class Telemetry(threading.Thread):
         self.lock = threading.Lock()
         self.data = {"v_ego": 0.0, "steering_deg": 0.0,
                      "steering_input": 0.0, "heading_rad": 0.0,
+                     "throttle_input": 0.0, "brake_input": 0.0,
                      "pos": (0.0, 0.0, 0.0)}
         self.ok = False
         self._stop = threading.Event()
@@ -220,14 +238,20 @@ class Panel:
         self.held_desire: str | None = None
 
     def layout(self, y0: int) -> None:
-        labels = [("engage", ""), ("lane_l", "< LANE"), ("lane_r", "LANE >"),
-                  ("turn_l", "< TURN"), ("turn_r", "TURN >"),
-                  ("long", ""), ("cal", "CAL"), ("cam", ""), ("ai", "AI"),
-                  ("spd_dn", "SPD-"), ("spd_up", "SPD+")]
-        n = len(labels)
-        w = CAM_W // n
-        self.buttons = [((i * w, y0, w - 4, 40), key, lab)
-                        for i, (key, lab) in enumerate(labels)]
+        rows = [
+            [("engage", ""), ("long", ""), ("cal", "CAL"),
+             ("cam", ""), ("ai", "AI")],
+            [("lane_l", "< LANE"), ("lane_r", "LANE >"),
+             ("turn_l", "< TURN"), ("turn_r", "TURN >"),
+             ("spd_dn", "SPD-"), ("spd_up", "SPD+")],
+        ]
+        self.buttons = []
+        for r, row in enumerate(rows):
+            w = UI_W // len(row)
+            for i, (key, lab) in enumerate(row):
+                self.buttons.append(
+                    ((i * w + 2, y0 + r * BTN_ROW_H, w - 4, BTN_ROW_H - 6),
+                     key, lab))
 
     def on_mouse(self, event, x, y, flags, param) -> None:
         if event == cv2.EVENT_LBUTTONUP:
@@ -265,9 +289,8 @@ class Panel:
             else:
                 col = (70, 70, 70)
             cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), col, -1)
-            cv2.putText(canvas, lab, (bx + 8, by + 27),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1,
-                        cv2.LINE_AA)
+            cv2.putText(canvas, lab, (bx + 7, by + 25), FONT, 0.5,
+                        (255, 255, 255), 1, cv2.LINE_AA)
 
 
 class App:
@@ -359,6 +382,9 @@ class App:
         self._a_meas_app = 0.0
         self._chart_v_prev: float | None = None
         self.lane_off_now = 0.0
+        # live values for the telemetry panel (op-replay-clipper style)
+        self.k_meas_now = 0.0
+        self.conf_now = 0.0
         self._log_f = None
         self.log_path = os.path.join(
             ROOT, "debug_out",
@@ -766,6 +792,8 @@ class App:
                 float(np.clip(a_raw, -12.0, 12.0)) - self._a_meas_app)
         self._chart_v_prev = v_ego
         self.lane_off_now = float(np.mean(decoded.lane_lines[1:3, 0, 0]))
+        self.k_meas_now = k_meas if v_ego > 1.0 else 0.0
+        self.conf_now = float(np.mean(decoded.lane_lines_prob[1:3]))
         long_live = self.engaged and self.long_mode != "off" \
             and not self.cal_active
         lat_live = self.engaged and not self.cal_active
@@ -829,7 +857,6 @@ class App:
               f"brk {self.last_brk:.2f}  {self.hz:4.1f} Hz")
         l2 = (f"lanes {probs}  lead {lead_p:.2f}"
               + (f" @{self.long.last_lead_x:.0f}m" if self.long.last_lead_x < 500 else "")
-              + f"  curv {self.lat.last_curvature:+.4f}"
               + f"  vT {min(self.long.last_v_target, 99)*2.237:3.0f}"
               + f"  aT {self.long.last_a_target:+.1f}"
               + (f"  corner@{self.long.last_corner_t:.0f}s"
@@ -848,15 +875,15 @@ class App:
               f"n={max(lp.samples, lp.session_samples)} [{trust}]"
               f"  off~{self._off_ema:+.2f}m"
               f"  trim {self.lat.axis_trim_state:+.3f}"
-              f"({self.lat.last_trim_frozen_reason or 'run'})"
-              f"  cam[{self.lc.blocks}b "
+              f"({self.lat.last_trim_frozen_reason or 'run'})")
+        l4 = (f"cam[{self.lc.blocks}b "
               f"{'LIVE' if self.calib_live else 'shdw'}"
               + (f" p{lc_p:+.2f}" if lc_p is not None else "")
               + f"]  aFB {self.long.last_a_fb:+.2f}")
         if self.desire_idx is not None:
-            l3 += f"   >>> {DESIRE_NAME[self.desire_idx]} " \
+            l4 += f"   >>> {DESIRE_NAME[self.desire_idx]} " \
                   f"({self.desire_until - time.monotonic():.1f}s)"
-        return [l1, l2, l3]
+        return [l1, l2, l3, l4]
 
 
 def draw_charts(canvas: np.ndarray, app: App) -> None:
@@ -871,7 +898,7 @@ def draw_charts(canvas: np.ndarray, app: App) -> None:
         ("curv x1000", "k", "kM", 1000.0, 2.0),
     ]
     W, H, M = 300, 80, 8
-    x1 = CAM_W - W - M
+    x1 = canvas.shape[1] - W - M
     for i, (label, want_key, does_key, scale, min_span) in enumerate(panels):
         y0 = M + i * (H + M)
         want = np.array(app.chart[want_key], dtype=np.float64) * scale
@@ -915,6 +942,157 @@ def draw_charts(canvas: np.ndarray, app: App) -> None:
                     cv2.LINE_AA)
 
 
+def _build_wheel_icon(size: int = 186) -> np.ndarray:
+    """Grayscale steering-wheel mask: rim ring + three spokes + hub.
+    Rotated per frame by the ACTUAL steering angle, so the on-screen
+    wheel turns with the car's."""
+    m = np.zeros((size, size), np.uint8)
+    c = size // 2
+    r = c - 4
+    cv2.circle(m, (c, c), r, 255, -1)
+    cv2.circle(m, (c, c), r - 16, 0, -1)          # rim ring
+    for dx, dy in ((-1.0, 0.22), (1.0, 0.22), (0.0, 1.0)):   # 3 spokes
+        n = math.hypot(dx, dy)
+        x2 = int(c + (r - 6) * dx / n)
+        y2 = int(c + (r - 6) * dy / n)
+        cv2.line(m, (c, c), (x2, y2), 255, 18)
+    cv2.circle(m, (c, c), 26, 255, -1)            # hub
+    return m
+
+
+_WHEEL_ICON = _build_wheel_icon()
+
+
+def draw_telemetry(canvas: np.ndarray, app: App, tel: dict,
+                   v_ego: float) -> None:
+    """op-replay-clipper-style live telemetry: what the model wants vs
+    what the controller applied vs what the car is doing."""
+    y0 = CAM_VIEW_H
+    canvas[y0:y0 + TELEM_H] = C_BG
+
+    cv2.putText(canvas, "TELEMETRY", (28, y0 + 40), FONT, 0.85,
+                C_LABEL, 2, cv2.LINE_AA)
+    mode = app.long_mode.upper()
+    mcol = {"EXP": C_BLUE, "CHILL": C_GREEN, "OFF": C_LABEL}[mode]
+    cv2.putText(canvas, mode, (UI_W - 150, y0 + 38), FONT, 0.6, mcol, 1,
+                cv2.LINE_AA)
+
+    # ---- steering wheel + arcs ----
+    size = _WHEEL_ICON.shape[0]
+    cx, cy = 250, y0 + 66 + size // 2
+    for rr in (size // 2 + 12, size // 2 + 20, size // 2 + 28):
+        cv2.ellipse(canvas, (cx, cy), (rr, rr), 0, -210, 30, C_DIM, 3,
+                    cv2.LINE_AA)
+    # BeamNG electrics 'steering' is wheel degrees, positive = left
+    # (CCW): warpAffine positive angle is also CCW, so pass through.
+    rot = cv2.warpAffine(
+        _WHEEL_ICON,
+        cv2.getRotationMatrix2D((size / 2, size / 2),
+                                float(tel["steering_deg"]), 1.0),
+        (size, size))
+    x1, ytop = cx - size // 2, cy - size // 2
+    roi = canvas[ytop:ytop + size, x1:x1 + size]
+    roi[rot > 127] = C_WHITE
+
+    # arc markers, axis units (-1..1) mapped to +/-120 deg from top:
+    # white = the car's wheel, orange = applied cmd, blue = pre-EPS tgt
+    def arc_pt(axis_val: float, radius: int) -> tuple[int, int]:
+        th = math.radians(float(np.clip(axis_val, -1, 1)) * 120.0)
+        return (int(cx + radius * math.sin(th)),
+                int(cy - radius * math.cos(th)))
+
+    if app.engaged:
+        cv2.circle(canvas, arc_pt(app.lat.last_axis_target,
+                                  size // 2 + 20), 5, C_BLUE, -1,
+                   cv2.LINE_AA)
+        cv2.circle(canvas, arc_pt(app.lat.last_axis, size // 2 + 20), 5,
+                   C_ORANGE, -1, cv2.LINE_AA)
+    cv2.circle(canvas, arc_pt(tel["steering_input"], size // 2 + 28), 7,
+               C_WHITE, -1, cv2.LINE_AA)
+    lch = app.desire_idx in (1, 3)
+    rch = app.desire_idx in (2, 4)
+    cv2.putText(canvas, "<", (cx - size // 2 - 74, cy - 20), FONT, 1.5,
+                C_WHITE if lch else C_DIM, 3, cv2.LINE_AA)
+    cv2.putText(canvas, ">", (cx + size // 2 + 44, cy - 20), FONT, 1.5,
+                C_WHITE if rch else C_DIM, 3, cv2.LINE_AA)
+
+    # ---- confidence pill (right edge) ----
+    conf = float(np.clip(app.conf_now, 0.0, 1.0))
+    tx = UI_W - 68
+    t_top, t_bot = y0 + 96, y0 + TELEM_H - 130
+    cv2.putText(canvas, "CONF", (tx - 24, y0 + 78), FONT, 0.5, C_LABEL,
+                1, cv2.LINE_AA)
+    cv2.line(canvas, (tx, t_top), (tx, t_bot), C_DIM, 3, cv2.LINE_AA)
+    ccol = ((80, 220, 120) if conf > 0.5 else
+            (74, 192, 232) if conf > 0.25 else (60, 60, 220))
+    by = int(t_bot - conf * (t_bot - t_top))
+    cv2.circle(canvas, (tx, by), 14, (10, 10, 10), -1, cv2.LINE_AA)
+    cv2.circle(canvas, (tx, by), 11, ccol, -1, cv2.LINE_AA)
+
+    # ---- value rows ----
+    def row(y: int, label: str, value: str, vcol) -> None:
+        cv2.putText(canvas, label, (36, y), FONT, 0.55, C_LABEL, 1,
+                    cv2.LINE_AA)
+        cv2.putText(canvas, value, (200, y), FONT, 0.8, vcol, 2,
+                    cv2.LINE_AA)
+
+    ry = cy + size // 2 + 52
+    v2 = max(v_ego, 1.0) ** 2
+    row(ry, "DES LAT", f"{v2 * app.lat.last_curvature:+.2f} m/s2", C_BLUE)
+    row(ry + 38, "ACT LAT", f"{v2 * app.k_meas_now:+.2f} m/s2", C_GREEN)
+    row(ry + 76, "TGT %", f"{app.lat.last_axis_target * 100:+.0f}%",
+        C_YELLOW)
+    row(ry + 114, "APP %", f"{app.lat.last_axis * 100:+.0f}%", C_ORANGE)
+    row(ry + 152, "ACTUAL", f"{tel['steering_deg']:+.1f} deg", C_WHITE)
+    hands_on = (time.monotonic() - app.lp.last_intervened_ts) < 1.0
+    row(ry + 190, "HANDS", "ON WHEEL" if hands_on else "OFF WHEEL",
+        C_WHITE)
+
+    # ---- pedals: DRIVER column | OPENPILOT column ----
+    py = ry + 226
+    cv2.putText(canvas, "DRIVER", (36, py), FONT, 0.5, C_LABEL, 1,
+                cv2.LINE_AA)
+    cv2.putText(canvas, "ONNX", (300, py), FONT, 0.5, C_LABEL, 1,
+                cv2.LINE_AA)
+
+    def bar(x: int, y: int, frac: float, col) -> None:
+        w, h = 240, 12
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), (50, 42, 32), -1)
+        if frac > 0.005:
+            cv2.rectangle(canvas, (x, y),
+                          (x + int(w * min(frac, 1.0)), y + h), col, -1)
+
+    # driver pedals only mean anything when the user owns them
+    user_pedals = app.long_mode == "off"
+    thr_in, brk_in = tel["throttle_input"], tel["brake_input"]
+    for i, (name, dval, oval, col) in enumerate((
+            ("GAS", thr_in, app.last_thr, C_GREEN),
+            ("BRAKE", brk_in, app.last_brk, (60, 60, 220)))):
+        yy = py + 34 + i * 46
+        cv2.putText(canvas, name, (36, yy), FONT, 0.55, C_LABEL, 1,
+                    cv2.LINE_AA)
+        dtxt = f"{dval * 100:.0f}%" if user_pedals and dval > 0.02 \
+            else "OFF"
+        cv2.putText(canvas, dtxt, (120, yy), FONT, 0.6, C_WHITE, 1,
+                    cv2.LINE_AA)
+        bar(300, yy - 11, oval, col)
+        cv2.putText(canvas, f"{oval * 100:.0f}%", (552, yy), FONT, 0.55,
+                    C_WHITE, 1, cv2.LINE_AA)
+
+    # ---- accel strip: A EGO | A TARGET | CMD | OUT ----
+    ay = py + 128
+    cols = [("A EGO", app._a_meas_app, C_GREEN, 36),
+            ("A TARGET", app.long.last_a_target, C_BLUE, 210),
+            ("CMD", app.long.last_a_cmd, C_YELLOW, 400),
+            ("OUT", app.long.last_a_cmd + app.long.last_a_fb, C_WHITE,
+             540)]
+    for name, val, col, x in cols:
+        cv2.putText(canvas, name, (x, ay), FONT, 0.5, C_LABEL, 1,
+                    cv2.LINE_AA)
+        cv2.putText(canvas, f"{val:+.2f}", (x, ay + 34), FONT, 0.8, col,
+                    2, cv2.LINE_AA)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", action="store_true",
@@ -924,14 +1102,15 @@ def main() -> int:
 
     app = App(args)
     panel = Panel(app)
-    panel.layout(CAM_H + 4)
+    btn_y0 = CAM_VIEW_H + TELEM_H + 4
+    panel.layout(btn_y0)
     bridge = ModBridge(app)
     bridge.start()
 
-    canvas = np.zeros((CAM_H + PANEL_H, CAM_W, 3), dtype=np.uint8)
+    canvas = np.zeros((TOTAL_H, UI_W, 3), dtype=np.uint8)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW, int(CAM_W * args.scale),
-                     int((CAM_H + PANEL_H) * args.scale))
+    cv2.resizeWindow(WINDOW, int(UI_W * args.scale),
+                     int(TOTAL_H * args.scale))
     # Qt backend realizes the window asynchronously — setMouseCallback
     # throws "NULL window handler" until the event loop has actually
     # created it. Pump the loop and retry; fall back to keyboard-only.
@@ -980,22 +1159,23 @@ def main() -> int:
                     and app.frame_idx > WARMUP_FRAMES:
                 app.disengage(f"loop rate {app.hz:.0f} Hz")
 
-            canvas[:CAM_H] = draw_overlay(bgr, d, app.calib)
+            canvas[:CAM_VIEW_H] = cv2.resize(
+                draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
+                interpolation=cv2.INTER_AREA)
             if app.charts_on:
                 draw_charts(canvas, app)
-            canvas[CAM_H:] = 24
+            draw_telemetry(canvas, app, tel, v_ego)
+            canvas[btn_y0 - 4:] = 24
             panel.draw(canvas)
+            hud_y = btn_y0 + 2 * BTN_ROW_H + 14
             for i, line in enumerate(app.hud_lines(d, v_ego)):
-                cv2.putText(canvas, line, (10, CAM_H + 58 + 16 * i),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                            (230, 230, 230), 1, cv2.LINE_AA)
+                cv2.putText(canvas, line, (10, hud_y + 17 * i), FONT,
+                            0.4, (230, 230, 230), 1, cv2.LINE_AA)
             if time.monotonic() < app.banner_until:
-                cv2.putText(canvas, app.banner, (CAM_W // 2 - 200, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4,
-                            cv2.LINE_AA)
-                cv2.putText(canvas, app.banner, (CAM_W // 2 - 200, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (80, 220, 255), 2,
-                            cv2.LINE_AA)
+                cv2.putText(canvas, app.banner, (16, 34), FONT, 0.7,
+                            (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(canvas, app.banner, (16, 34), FONT, 0.7,
+                            (80, 220, 255), 2, cv2.LINE_AA)
             if app.incident_note:
                 inc_dir = os.path.join(ROOT, "debug_out", "incidents")
                 os.makedirs(inc_dir, exist_ok=True)
