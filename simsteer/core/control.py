@@ -240,6 +240,14 @@ class ControllerConfig:
     # gentle stop-phase commands (-0.5..-1.2) fall into a phantom coast
     # gap at low speed and the brake never fires at the end of stops.
     pedal_cal_v: float = 18.0
+    # Launch attenuation: the pedal tables are measured at 9-18 m/s
+    # (2nd/3rd gear); an automatic's 1st-gear torque-converter
+    # multiplication makes the same pedal deliver ~2x the accel off
+    # the line (run logs: 7 launches, a_meas peaked 3.8-4.15 vs a
+    # commanded ~1.9 at 0.19 throttle). Scale the throttle DEMAND by
+    # this factor at standstill, fading to 1.0 by launch_thr_full_v.
+    launch_thr_scale: float = 0.5
+    launch_thr_full_v: float = 6.0
     # Stopping state (openpilot LongControl 'stopping'): once the plan
     # wants a stop and speed drops below stop_hold_speed, RAMP the
     # brake up to stop_hold_brake over stop_brake_ramp_s and hold —
@@ -821,9 +829,15 @@ class LongitudinalController:
         # its long PID integrator in the stopping state — same idea:
         # zero the feedback and rapidly forget the integral.
         approaching_stop = v_target < 1.0 and v_ego < 4.0
+        # Anti-windup on the ACTUATOR, not the command clamp: a chill
+        # launch rides the ISO +2.0 clamp for its whole duration, and
+        # freezing there left the mid-range engine shortfall (act ~60%
+        # of want) uncorrected. Windup is only real when the pedal
+        # itself has no headroom left.
+        pedal_sat = (self.last_throttle >= 0.98
+                     or self.last_brake >= 0.98)
         gate = (not aeb and not approaching_stop and v_ego > 2.0
-                and self._stop_brake == 0.0
-                and cfg.accel_cmd_min_mps2 < setpoint < cfg.accel_cmd_max_mps2
+                and self._stop_brake == 0.0 and not pedal_sat
                 and len(self._a_hist) == self._a_hist.maxlen)
         if approaching_stop:
             self._a_fb_i *= math.exp(-dt / 0.5)
@@ -894,8 +908,15 @@ class LongitudinalController:
                                        self._stop_brake + ramp)
                 throttle, brake = 0.0, self._stop_brake
             elif a_cmd + drag_eff >= 0.0:
+                # 1st-gear torque multiplication: same pedal, ~2x the
+                # accel off the line vs the 9-18 m/s CAL region —
+                # shrink the demand fed to the table at low speed.
+                launch = float(np.interp(
+                    v_ego, [0.0, max(cfg.launch_thr_full_v, 0.1)],
+                    [cfg.launch_thr_scale, 1.0]))
                 throttle = float(np.clip(
-                    np.interp(a_cmd + drag_eff, tx, tp), 0.0, 1.0))
+                    np.interp((a_cmd + drag_eff) * launch, tx, tp),
+                    0.0, 1.0))
                 brake = 0.0
             elif -a_cmd <= coast_decel_eff + cfg.accel_deadband_mps2:
                 throttle, brake = 0.0, 0.0   # coasting already does it
