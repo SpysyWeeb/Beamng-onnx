@@ -206,7 +206,7 @@ class ControllerConfig:
     # coming before we're in it. Effective long-action-time =
     # lookahead_s + long_anticipation_s. lookahead_s is the static
     # steerActuatorDelay tunable from the tuner.
-    long_anticipation_s: float = 1.0
+    long_anticipation_s: float = 0.5
     # m/s^2 of *commanded* acceleration that maps to a full-pressed
     # throttle (axis=1.0). This is a PEDAL SCALE, not a limit — it
     # should reflect what the vehicle actually does at full pedal, or
@@ -245,8 +245,13 @@ class ControllerConfig:
     # Proportional on the LPF'd error between what we commanded ~0.3 s
     # ago and what the car actually did (dv/dt). Corrects pedal-map
     # residuals, load, slopes, damage — live. 0 disables.
-    accel_fb_p: float = 0.4
-    accel_fb_clip: float = 1.0
+    # GENTLE by necessity: this loop carries ~1 s of total delay
+    # (setpoint history + two LPFs + pedal response) — at P=0.4 it
+    # oscillated, shoving the command across the coast gap every few
+    # seconds (field report: 'gassing and braking over and over').
+    # 0.12 makes it a slow trim, all a loop this delayed can be.
+    accel_fb_p: float = 0.12
+    accel_fb_clip: float = 0.5
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
@@ -788,7 +793,7 @@ class LongitudinalController:
         if (cfg.accel_fb_p > 0 and not aeb and v_ego > 2.0
                 and len(self._a_hist) == self._a_hist.maxlen):
             err = float(self._a_hist[0]) - self._a_meas
-            self._a_err_lpf += 0.2 * (err - self._a_err_lpf)
+            self._a_err_lpf += 0.08 * (err - self._a_err_lpf)
             fb = float(np.clip(cfg.accel_fb_p * self._a_err_lpf,
                                -cfg.accel_fb_clip, cfg.accel_fb_clip))
         else:

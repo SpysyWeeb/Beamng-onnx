@@ -572,7 +572,7 @@ class App:
         # the future NOW — the whole stop profile ran early and the car
         # halted metres before the line. Corner braking keeps its own
         # 6 s scan horizon; this only times plan-following.
-        self.cfg.long_anticipation_s = 0.3
+        self.cfg.long_anticipation_s = 0.5
         self.cfg.save(game="beamng")
 
         self.set_banner(f"CAL done: a={a:+.2f} ({n} samples, frozen)  "
