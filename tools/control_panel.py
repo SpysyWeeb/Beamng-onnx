@@ -327,6 +327,7 @@ class App:
         self.last_brk = 0.0
         self.hz = 0.0
         self._signal_state: str | None = None
+        self._off_ema = 0.0
 
     # ---- UI actions ----
 
@@ -682,9 +683,18 @@ class App:
                  if self.long.last_v_safe_corner < self.long.last_v_target + 1
                  else "")
               + ("  AEB!" if self.long.last_aeb else ""))
+        # slow lane-center offset EMA (~10 s): steady nonzero sign at
+        # highway = controls/mount bias (watch trim fight it); sign
+        # flipping with scene/curves = model behavior
+        off_now = float(np.mean(decoded.lane_lines[1:3, 0, 0]))
+        if abs(off_now) < 3.0:
+            self._off_ema += 0.005 * (off_now - self._off_ema)
         trust = "OK" if lp.trusted() else "COLD"
         l3 = (f"rack a={lp.a_linear:+.2f} b={lp.b_quad:+.4f} "
-              f"n={max(lp.samples, lp.session_samples)} [{trust}]")
+              f"n={max(lp.samples, lp.session_samples)} [{trust}]"
+              f"  off~{self._off_ema:+.2f}m"
+              f"  trim {self.lat.axis_trim_state:+.3f}"
+              f"({self.lat.last_trim_frozen_reason or 'run'})")
         if self.desire_idx is not None:
             l3 += f"   >>> {DESIRE_NAME[self.desire_idx]} " \
                   f"({self.desire_until - time.monotonic():.1f}s)"

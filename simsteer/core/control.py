@@ -222,6 +222,17 @@ class ControllerConfig:
     # None -> legacy scale-only mapping above.
     pedal_thr_map: list | None = None
     pedal_brk_map: list | None = None
+    # The tables' zero-pedal anchors (coast decel / drag) were measured
+    # at ~18-25 m/s; drag and engine braking shrink with speed, so the
+    # anchors are scaled by v/18 (floored) before inversion — otherwise
+    # gentle stop-phase commands (-0.5..-1.2) fall into a phantom coast
+    # gap at low speed and the brake never fires at the end of stops.
+    pedal_cal_v: float = 18.0
+    # Stop-and-hold (openpilot's stopping state): below this speed with
+    # no go command, hold a constant brake — an automatic in D creeps
+    # through the stop line at zero pedal otherwise.
+    stop_hold_speed: float = 0.6
+    stop_hold_brake: float = 0.3
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
@@ -550,6 +561,7 @@ class LongitudinalController:
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
+        self._was_moving = False
         self.last_throttle = 0.0
         self.last_brake = 0.0
         # Corner-anticipation diagnostics for the HUD.
@@ -570,6 +582,7 @@ class LongitudinalController:
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
+        self._was_moving = False
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_v_safe_corner = float("inf")
@@ -739,15 +752,35 @@ class LongitudinalController:
             tp = [p[1] for p in cfg.pedal_thr_map]
             bd = [p[0] for p in cfg.pedal_brk_map]
             bp = [p[1] for p in cfg.pedal_brk_map]
-            coast_a = ta[0]      # accel with zero pedal (negative)
-            if a_cmd >= coast_a:
-                throttle = float(np.clip(np.interp(a_cmd, ta, tp), 0.0, 1.0))
+            # Split each table into (pedal-component, pedal) with the
+            # coast anchor speed-scaled: the engine/brake torque
+            # components transfer across speeds, the drag part doesn't.
+            vfrac = float(np.clip(v_ego / max(cfg.pedal_cal_v, 1.0),
+                                  0.15, 1.0))
+            drag_eff = -ta[0] * vfrac        # ta[0] is coast accel (<0)
+            tx = [x - ta[0] for x in ta]     # engine component, >= 0
+            bx = [x - bd[0] for x in bd]     # brake component, >= 0
+            coast_decel_eff = bd[0] * vfrac
+            self._was_moving = self._was_moving or v_ego > 2.0
+            if (self._was_moving and v_ego < cfg.stop_hold_speed
+                    and a_cmd < 0.1 and v_target < 1.0):
+                # Came to a stop while driving: hold against automatic
+                # creep. Releases the moment the plan wants speed again
+                # (v_target). NOT armed before the first movement —
+                # holding at engage-from-standstill deadlocks: the
+                # model sees a parked scene and plans zero forever
+                # (creep is what seeds a standstill launch).
+                throttle, brake = 0.0, cfg.stop_hold_brake
+            elif a_cmd + drag_eff >= 0.0:
+                throttle = float(np.clip(
+                    np.interp(a_cmd + drag_eff, tx, tp), 0.0, 1.0))
                 brake = 0.0
-            elif -a_cmd <= bd[0] + cfg.accel_deadband_mps2:
-                throttle, brake = 0.0, 0.0   # coast already does this
+            elif -a_cmd <= coast_decel_eff + cfg.accel_deadband_mps2:
+                throttle, brake = 0.0, 0.0   # coasting already does it
             else:
                 throttle = 0.0
-                brake = float(np.clip(np.interp(-a_cmd, bd, bp), 0.0, 1.0))
+                brake = float(np.clip(
+                    np.interp(-a_cmd - coast_decel_eff, bx, bp), 0.0, 1.0))
         elif a_cmd > 0:
             throttle = min(1.0, a_cmd / max(cfg.max_accel_mps2, 1e-3))
             brake = 0.0
