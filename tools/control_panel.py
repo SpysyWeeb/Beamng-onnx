@@ -372,6 +372,8 @@ class App:
         self.last_thr = 0.0
         self.last_brk = 0.0
         self.hz = 0.0
+        self.hz_ema = 20.0
+        self._rate_warned_until = 0.0
         self._signal_state: str | None = None
         self._off_ema = 0.0
         # flight recorder: capture what the model saw when its plan
@@ -1180,6 +1182,20 @@ def main() -> int:
             if app.engaged and app.hz and app.hz < 8.0 \
                     and app.frame_idx > WARMUP_FRAMES:
                 app.disengage(f"loop rate {app.hz:.0f} Hz")
+            # sustained under-rate warning: the model's temporal
+            # buffers assume 20 Hz — at ~12 Hz it sees a slow-motion
+            # world and its plans thrash (big-model field report:
+            # 'spazzing', steer activity 20x). Warn loudly instead of
+            # driving badly until the 8 Hz hard stop.
+            if app.hz:
+                app.hz_ema += 0.05 * (app.hz - app.hz_ema)
+            if (app.engaged and app.frame_idx > WARMUP_FRAMES
+                    and app.hz_ema < 16.0
+                    and time.monotonic() > app._rate_warned_until):
+                app._rate_warned_until = time.monotonic() + 10.0
+                app.set_banner(
+                    f"loop {app.hz_ema:.0f} Hz < 20: model time-warped"
+                    " - lower game graphics or use a smaller model", 6.0)
 
             canvas[:CAM_VIEW_H] = cv2.resize(
                 draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
