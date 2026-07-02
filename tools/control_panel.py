@@ -1152,6 +1152,11 @@ def main() -> int:
         print("[panel] WARNING: mouse buttons unavailable in this cv2 "
               "build — use the keyboard bindings (see --help)", flush=True)
     last = time.monotonic()
+    # per-stage timing: where does the tick go? gap = frame-to-frame
+    # (includes waiting on the game's camera), model = warp+inference,
+    # draw = all UI. If gap >> work, the GAME's render rate is the
+    # bottleneck (camera frames simply aren't arriving at 20 Hz).
+    perf = {"gap": 0.0, "model": 0.0, "ctl": 0.0, "draw": 0.0, "n": 0}
     try:
         while True:
             t0 = time.monotonic()
@@ -1163,18 +1168,23 @@ def main() -> int:
             app.frame_idx += 1
             dt = max(1e-3, t0 - last)
             last = t0
+            perf["gap"] += dt
 
             desire_vec = None
             if app.desire_idx is not None:
                 desire_vec = np.zeros(DESIRE_LEN, dtype=np.float32)
                 desire_vec[app.desire_idx] = 1.0
 
+            t_m = time.monotonic()
             img, big = app.queue.push(bgr, app.calib)
             d = app._decode(img, big, desire_vec)
+            perf["model"] += time.monotonic() - t_m
 
+            t_c = time.monotonic()
             tel = app.tel.snapshot()
             v_ego = tel["v_ego"]
             app.control_tick(d, v_ego, dt)
+            perf["ctl"] += time.monotonic() - t_c
             if panel.held_desire:
                 app.action(panel.held_desire)   # extend while held
 
@@ -1197,6 +1207,7 @@ def main() -> int:
                     f"loop {app.hz_ema:.0f} Hz < 20: model time-warped"
                     " - lower game graphics or use a smaller model", 6.0)
 
+            t_d = time.monotonic()
             canvas[:CAM_VIEW_H] = cv2.resize(
                 draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
                 interpolation=cv2.INTER_AREA)
@@ -1226,6 +1237,24 @@ def main() -> int:
                 app.incident_note = None
 
             cv2.imshow(WINDOW, canvas)
+            perf["draw"] += time.monotonic() - t_d
+            perf["n"] += 1
+            if perf["n"] >= 100:
+                n = perf["n"]
+                line = (f"gap {perf['gap']/n*1000:5.1f} ms/frame "
+                        f"({n/max(perf['gap'],1e-3):4.1f} Hz)  |  "
+                        f"model {perf['model']/n*1000:5.1f}  "
+                        f"ctl {perf['ctl']/n*1000:4.1f}  "
+                        f"draw {perf['draw']/n*1000:4.1f} ms")
+                print(f"[perf] {line}", flush=True)
+                os.makedirs(os.path.join(ROOT, "debug_out"),
+                            exist_ok=True)
+                with open(os.path.join(ROOT, "debug_out",
+                                       "perf_last.txt"), "w") as f:
+                    f.write(line + "\n")
+                for k in perf:
+                    perf[k] = 0.0
+                perf["n"] = 0
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
