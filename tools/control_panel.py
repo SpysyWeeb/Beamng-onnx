@@ -811,14 +811,18 @@ class App:
                 self.sender.submit(steer, thr, brk)
             commanded = steer
 
-        # Feed the learners: our command while we drive, the game's own
-        # steering input while a human / BeamNG AI drives (passive
-        # fit). Skipped during CAL — the system-ID computes its own
-        # fit and installs it wholesale.
+        # Feed the rack learner ONLY from human/AI driving (passive
+        # fit: the game's own steering input vs resulting yaw —
+        # independent signals, well-posed). Engaged samples pair OUR
+        # command with a MODEL-derived wheel through the loop's lag:
+        # circular data that dragged a 2.0→0.71, →0.84, →1.27 across
+        # three separate sessions ('steering feels lazy'). While
+        # engaged, the CAL measurement owns the gain and the trim
+        # integrator owns residuals — openpilot's paramsd similarly
+        # learns from independent sensors, not its own commands.
         tel = self.tel.snapshot()
-        game_steer = (None if self.cal_active else
-                      (commanded if commanded is not None
-                       else tel["steering_input"]))
+        game_steer = (None if (self.cal_active or self.engaged) else
+                      tel["steering_input"])
         self.lp.update(game_steer, v_ego, wheel, commanded_axis=game_steer)
 
         # Camera-pose learner runs on every frame (its own gates handle
