@@ -59,23 +59,55 @@ def fov_v_deg(fov_h_deg: float, w: int, h: int) -> float:
 
 
 class BeamNGOnnxWorld:
-    def __init__(self, host: str = HOST, port: int = PORT):
+    def __init__(self, host: str = HOST, port: int = PORT,
+                 map_name: str = MAP, vehicle_model: str = VEHICLE_MODEL,
+                 attach: bool = False):
+        """attach=False: build our scripted scenario (spawn coordinates
+        are per-map; only west_coast_usa ships them). attach=True:
+        FREEROAM INTERCEPTION — hook whatever the player already
+        loaded: find the current vehicle (prefer one matching
+        `vehicle_model`), connect, and drive it. Verified against
+        beamngpy 1.35: get_current + sensors.attach + connect works
+        on vehicles we didn't create."""
         print(f"[world] connecting to BeamNG at {host}:{port} ...", flush=True)
         import threading
         self._ctl_lock = threading.Lock()
         self._signal_cache: str | None = None
+        self.attached = attach
         self.bng = BeamNGpy(host, port)
         self.bng.open(launch=False)
 
-        print(f"[world] loading scenario {MAP} ...", flush=True)
-        scenario = Scenario(MAP, "beamng_onnx")
-        self.vehicle = Vehicle("ego", model=VEHICLE_MODEL, license="ONNX")
-        scenario.add_vehicle(self.vehicle, pos=SPAWN_POS, rot_quat=SPAWN_ROT_QUAT)
-        scenario.make(self.bng)
-        self.bng.scenario.load(scenario)
-        self.bng.scenario.start()
-
-        self.vehicle.sensors.attach("electrics", Electrics())
+        if attach:
+            sc = self.bng.scenario.get_current(connect=False)
+            vehicles = self.bng.vehicles.get_current(include_config=False)
+            if not vehicles:
+                raise RuntimeError(
+                    "attach mode: no vehicle in the current session — "
+                    "load a map (Freeroam) and enter a car first")
+            vid = next((k for k, v in vehicles.items()
+                        if getattr(v, "model", "") == vehicle_model),
+                       next(iter(vehicles)))
+            self.vehicle = vehicles[vid]
+            self.vehicle.sensors.attach("electrics", Electrics())
+            self.vehicle.connect(self.bng)
+            print(f"[world] attached to running session: level "
+                  f"{sc.level!r}, vehicle {vid!r} "
+                  f"({getattr(self.vehicle, 'model', '?')})", flush=True)
+        else:
+            if map_name != MAP:
+                raise RuntimeError(
+                    f"scripted spawn coordinates only exist for {MAP!r};"
+                    f" load {map_name!r} in-game and use attach mode")
+            print(f"[world] loading scenario {map_name} ...", flush=True)
+            scenario = Scenario(map_name, "beamng_onnx")
+            self.vehicle = Vehicle("ego", model=vehicle_model,
+                                   license="ONNX")
+            scenario.add_vehicle(self.vehicle, pos=SPAWN_POS,
+                                 rot_quat=SPAWN_ROT_QUAT)
+            scenario.make(self.bng)
+            self.bng.scenario.load(scenario)
+            self.bng.scenario.start()
+            self.vehicle.sensors.attach("electrics", Electrics())
 
         self.camera = Camera(
             "onnxcam", self.bng, self.vehicle,

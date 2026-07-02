@@ -64,3 +64,4 @@ debug_out/
 controller_*.json
 calibration_*.json
 livecalib_state*.json
+launcher_beamng.json

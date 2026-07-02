@@ -300,7 +300,10 @@ class App:
                                  height_m=CAM_HEIGHT_M,
                                  lateral_sign=CAM_LATERAL_SIGN)
         # World FIRST, GPU session second (RDNA4 level-load VRAM rule).
-        self.world = BeamNGOnnxWorld()
+        self.world = BeamNGOnnxWorld(
+            map_name=getattr(args, "map", None) or "west_coast_usa",
+            vehicle_model=getattr(args, "vehicle", None) or "bastion",
+            attach=bool(getattr(args, "attach", False)))
         if args.split:
             self.model = DrivingModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
@@ -528,6 +531,10 @@ class App:
         self.set_banner(f"DISENGAGED ({reason})")
 
     def start_cal(self) -> None:
+        if getattr(self.world, "attached", False):
+            self.set_banner("CAL teleports to the west_coast_usa spawn — "
+                            "unavailable in attach/freeroam mode", 5.0)
+            return
         if self.engaged:
             self.disengage("calibration")
         if self.ai_on:
@@ -1098,6 +1105,15 @@ def main() -> int:
     ap.add_argument("--split", action="store_true",
                     help="use the split 0.11.1 pair instead of supercombo")
     ap.add_argument("--scale", type=float, default=0.8)
+    ap.add_argument("--map", default="west_coast_usa",
+                    help="map for the scripted scenario (attach mode "
+                         "ignores this)")
+    ap.add_argument("--vehicle", default="bastion",
+                    help="vehicle model to spawn / prefer when attaching")
+    ap.add_argument("--attach", action="store_true",
+                    help="hook the vehicle already loaded in-game "
+                         "(Freeroam interception) instead of spawning "
+                         "our scenario")
     args = ap.parse_args()
 
     app = App(args)

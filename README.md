@@ -77,10 +77,30 @@ repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
 
 ## Running
 
+**Easiest path — the start panel:**
+
+```bash
+python tools/start_panel.py
+```
+
+It auto-detects your BeamNG install and tech.key, lets you pick a map
+and vehicle, launches the game with the tech server if it isn't up,
+and starts the control panel. `west_coast_usa` uses our scripted
+scenario with the calibrated spawn; any other map runs through
+*freeroam interception* — load the map in-game, enter a car, press
+START and the model hooks that car. Without a BeamNG.tech `tech.key`
+the planned player-view + virtual-gamepad mode isn't built yet, so a
+tech license (free for personal use from BeamNG) is currently
+required.
+
+**Manual pieces:**
+
 ```bash
 bash launch_beamng.sh                     # host: BeamNG.tech + tech server
 
 # in the Python env:
+python tools/control_panel.py             # the main app (viewer+telemetry)
+python tools/control_panel.py --attach    # hook the car already in-game
 python tools/live_view.py --supercombo    # live overlay viewer; drive manually
 python tools/live_view.py --ai            # let BeamNG's AI drive (split model)
 python tools/m1_beamng_frame.py --supercombo --ai --seconds 20   # scored probe
