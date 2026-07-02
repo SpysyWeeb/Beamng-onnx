@@ -180,6 +180,26 @@ class BeamNGOnnxWorld:
         with self._ctl_lock:
             self.vehicle.set_shift_mode("realistic_automatic")
 
+    def ensure_drive(self) -> None:
+        """Shift the automatic into D. After a spawn or vehicle reset
+        it sits in N/P and an engage just revs in neutral. Gear index
+        1 = first forward range (D on an automatic); harmless no-op if
+        already in D."""
+        with self._ctl_lock:
+            self.vehicle.queue_lua_command(
+                "if controller.mainController then "
+                "controller.mainController.shiftToGearIndex(1) end")
+
+    def set_signal(self, direction: str | None) -> None:
+        """Turn signals: 'left', 'right', or None for off. Drives the
+        blinker inputs directly in vehicle lua."""
+        left = 1 if direction == "left" else 0
+        right = 1 if direction == "right" else 0
+        with self._ctl_lock:
+            self.vehicle.queue_lua_command(
+                f"electrics.values.signal_left_input = {left} "
+                f"electrics.values.signal_right_input = {right}")
+
     def close(self) -> None:
         try:
             self.camera.remove()

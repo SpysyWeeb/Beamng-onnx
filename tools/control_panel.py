@@ -180,9 +180,14 @@ class ModBridge(threading.Thread):
 class Panel:
     """Buttons + HUD strip below the camera view."""
 
+    DESIRE_KEYS = ("lane_l", "lane_r", "turn_l", "turn_r")
+
     def __init__(self, state: "App"):
         self.app = state
         self.buttons: list[tuple[tuple[int, int, int, int], str, str]] = []
+        # desire button currently held down (mouse) — main loop repeats
+        # the action each frame so the desire stays alive while held
+        self.held_desire: str | None = None
 
     def layout(self, y0: int) -> None:
         labels = [("engage", ""), ("lane_l", "< LANE"), ("lane_r", "LANE >"),
@@ -195,11 +200,16 @@ class Panel:
                         for i, (key, lab) in enumerate(labels)]
 
     def on_mouse(self, event, x, y, flags, param) -> None:
+        if event == cv2.EVENT_LBUTTONUP:
+            self.held_desire = None
+            return
         if event != cv2.EVENT_LBUTTONDOWN:
             return
         for (bx, by, bw, bh), key, _ in self.buttons:
             if bx <= x <= bx + bw and by <= y <= by + bh:
                 self.app.action(key)
+                if key in self.DESIRE_KEYS:
+                    self.held_desire = key
                 return
 
     def draw(self, canvas: np.ndarray) -> None:
@@ -287,6 +297,7 @@ class App:
         self.last_thr = 0.0
         self.last_brk = 0.0
         self.hz = 0.0
+        self._signal_state: str | None = None
 
     # ---- UI actions ----
 
@@ -325,9 +336,18 @@ class App:
             self.engage(forced=True)
         elif key in ("lane_l", "lane_r", "turn_l", "turn_r"):
             idx = {"turn_l": 1, "turn_r": 2, "lane_l": 3, "lane_r": 4}[key]
-            self.desire_idx = idx
-            self.desire_until = now + DESIRE_HOLD_S[idx]
-            self.set_banner(f"desire: {DESIRE_NAME[idx]}")
+            if self.desire_idx == idx and now < self.desire_until:
+                # repeat while held (widget resends every 300 ms, cv2
+                # key autorepeat, desktop mouse-hold): keep the desire
+                # alive ~0.8 s past the last repeat — openpilot's
+                # blinker-held-desire-active behavior. A single tap
+                # still gets the full DESIRE_HOLD_S pulse via max().
+                self.desire_until = max(self.desire_until, now + 0.8)
+            else:
+                self.desire_idx = idx
+                self.desire_until = now + DESIRE_HOLD_S[idx]
+                self.set_banner(f"desire: {DESIRE_NAME[idx]}")
+            self._update_signal()
         elif key == "long":
             order = ["exp", "chill", "off"]
             self.long_mode = order[(order.index(self.long_mode) + 1) % 3]
@@ -355,11 +375,27 @@ class App:
             self.cfg.max_speed_mps = mph / 2.237
             self.set_banner(f"max speed {mph:.0f} mph")
 
+    def _update_signal(self) -> None:
+        """Blinker follows the active desire (left for turn/lane L,
+        right for R, off when it expires). Sends only on transitions."""
+        want = None
+        if self.desire_idx in (1, 3):
+            want = "left"
+        elif self.desire_idx in (2, 4):
+            want = "right"
+        if want != self._signal_state:
+            self._signal_state = want
+            try:
+                self.world.set_signal(want)
+            except Exception:
+                pass
+
     def engage(self, forced: bool = False) -> None:
         if self.ai_on:
             self.world.ai_disable()
             self.ai_on = False
         self.world.realistic_gearbox()   # arcade + held brake = REVERSE
+        self.world.ensure_drive()        # post-reset the box sits in N/P
         self.cal_active = False
         self.lat.reset()
         self.long.reset()
@@ -398,6 +434,7 @@ class App:
                          and now < self.desire_until)
         if not desire_active:
             self.desire_idx = None
+        self._update_signal()
 
         steer, thr, brk = 0.0, 0.0, 0.0
         commanded = None
@@ -527,6 +564,8 @@ def main() -> int:
             tel = app.tel.snapshot()
             v_ego = tel["v_ego"]
             app.control_tick(d, v_ego, dt)
+            if panel.held_desire:
+                app.action(panel.held_desire)   # extend while held
 
             # auto-disengage on loop-rate collapse
             if app.engaged and app.hz and app.hz < 8.0 \

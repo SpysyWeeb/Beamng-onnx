@@ -44,13 +44,17 @@
   </div>
 
   <div class="onnx-row">
-    <button ng-click="send('lane_l')">&#9664; LANE</button>
-    <button ng-click="send('lane_r')">LANE &#9654;</button>
+    <button ng-mousedown="desireDown('lane_l')" ng-mouseup="desireUp()"
+            ng-mouseleave="desireUp()">&#9664; LANE</button>
+    <button ng-mousedown="desireDown('lane_r')" ng-mouseup="desireUp()"
+            ng-mouseleave="desireUp()">LANE &#9654;</button>
   </div>
 
   <div class="onnx-row">
-    <button ng-click="send('turn_l')">&#9664; TURN</button>
-    <button ng-click="send('turn_r')">TURN &#9654;</button>
+    <button ng-mousedown="desireDown('turn_l')" ng-mouseup="desireUp()"
+            ng-mouseleave="desireUp()">&#9664; TURN</button>
+    <button ng-mousedown="desireDown('turn_r')" ng-mouseup="desireUp()"
+            ng-mouseleave="desireUp()">TURN &#9654;</button>
   </div>
 
   <div class="onnx-row">

@@ -15,6 +15,21 @@ angular.module('beamng.apps')
         bngApi.engineLua('if onnxPanel then onnxPanel.send("' + cmd + '") end');
       };
 
+      // Hold-to-keep for desires: while a lane/turn button is held,
+      // resend the command every 300 ms — the panel keeps the desire
+      // (and blinker) alive ~0.8 s past the last repeat. A tap still
+      // gets the normal one-shot pulse.
+      var holdTimer = null;
+      scope.desireDown = function (cmd) {
+        scope.send(cmd);
+        if (holdTimer) clearInterval(holdTimer);
+        holdTimer = setInterval(function () { scope.send(cmd); }, 300);
+      };
+      scope.desireUp = function () {
+        if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+      };
+      scope.$on('$destroy', scope.desireUp);
+
       // Status pushed by lua/ge/extensions/onnxPanel.lua via guihooks.
       scope.$on('OnnxPanelStatus', function (event, data) {
         scope.$evalAsync(function () {
