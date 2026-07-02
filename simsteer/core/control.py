@@ -248,6 +248,13 @@ class ControllerConfig:
     # this factor at standstill, fading to 1.0 by launch_thr_full_v.
     launch_thr_scale: float = 0.4
     launch_thr_full_v: float = 8.0
+    # Full speed-dependent throttle demand correction ([[v, scale]]):
+    # the pedal table is one speed slice of a gear-dependent surface.
+    # Fitted from 18k log samples (median measured/promised engine
+    # accel per speed bin): converter multiplies ~1.7x at 2-6 m/s,
+    # honest around 7-12 (the CAL region), under-delivers 25-35% in
+    # high gears. When set, replaces the two launch_thr_* knobs.
+    thr_scale_map: list | None = None
     # Stopping state (openpilot LongControl 'stopping'): once the plan
     # wants a stop and speed drops below stop_hold_speed, RAMP the
     # brake up to stop_hold_brake over stop_brake_ramp_s and hold —
@@ -911,14 +918,20 @@ class LongitudinalController:
                                        self._stop_brake + ramp)
                 throttle, brake = 0.0, self._stop_brake
             elif a_cmd + drag_eff >= 0.0:
-                # 1st-gear torque multiplication: same pedal, ~2x the
-                # accel off the line vs the 9-18 m/s CAL region —
-                # shrink the demand fed to the table at low speed.
-                launch = float(np.interp(
-                    v_ego, [0.0, max(cfg.launch_thr_full_v, 0.1)],
-                    [cfg.launch_thr_scale, 1.0]))
+                # Gear-dependent engine delivery: scale the DEMAND fed
+                # to the table by the measured per-speed correction
+                # (thr_scale_map), or the simple launch fade when no
+                # curve has been fitted for this car.
+                if cfg.thr_scale_map:
+                    scale = float(np.interp(
+                        v_ego, [p[0] for p in cfg.thr_scale_map],
+                        [p[1] for p in cfg.thr_scale_map]))
+                else:
+                    scale = float(np.interp(
+                        v_ego, [0.0, max(cfg.launch_thr_full_v, 0.1)],
+                        [cfg.launch_thr_scale, 1.0]))
                 throttle = float(np.clip(
-                    np.interp((a_cmd + drag_eff) * launch, tx, tp),
+                    np.interp((a_cmd + drag_eff) * scale, tx, tp),
                     0.0, 1.0))
                 brake = 0.0
             elif -a_cmd <= coast_decel_eff + cfg.accel_deadband_mps2:
