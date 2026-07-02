@@ -30,6 +30,7 @@ from simsteer.core.calibration import Calibration
 from simsteer.core.model import DrivingModel
 from simsteer.core.postprocess import decode, desired_curvature
 from simsteer.core.preprocess import FrameQueue, yuv6_to_bgr
+from simsteer.core.supercombo import SupercomboModel
 
 from beamng.world import BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG, CAM_HEIGHT_M, CAM_LATERAL_SIGN
 
@@ -39,6 +40,9 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=6.0)
     ap.add_argument("--ai", action="store_true",
                     help="let BeamNG's AI drive during capture (gives the model motion)")
+    ap.add_argument("--supercombo", action="store_true",
+                    help="run the unified driving_supercombo.onnx (2026 master) "
+                         "instead of the split vision+policy pair")
     args = ap.parse_args()
 
     calib = Calibration(image_w=CAM_W, image_h=CAM_H,
@@ -48,10 +52,19 @@ def main() -> int:
     world = BeamNGOnnxWorld()
 
     print("[m1] loading model (ROCm -> CPU fallback) ...", flush=True)
-    model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
-                         policy_providers=["CPUExecutionProvider"],
-                         intra_op_threads=3)
-    print(f"[m1] vision provider: {model.active_provider}", flush=True)
+    if args.supercombo:
+        model = SupercomboModel(
+            providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+            intra_op_threads=3)
+        step_decode = lambda i, b: model.decode(model.step(i, b))
+        print(f"[m1] supercombo {model.checkpoint} on {model.active_provider}",
+              flush=True)
+    else:
+        model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+                             policy_providers=["CPUExecutionProvider"],
+                             intra_op_threads=3)
+        step_decode = lambda i, b: decode(*model.step(i, b))
+        print(f"[m1] vision provider: {model.active_provider}", flush=True)
     queue = FrameQueue()
     try:
         if args.ai:
@@ -72,8 +85,7 @@ def main() -> int:
                 continue
             raw = bgr
             img, big_img = queue.push(bgr, calib)
-            vis, pol = model.step(img, big_img)
-            last_dec = decode(vis, pol)
+            last_dec = step_decode(img, big_img)
             lane_prob_hist.append(last_dec.lane_lines_prob.copy())
             frames += 1
             t_step.append(time.monotonic() - t0)

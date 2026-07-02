@@ -35,6 +35,7 @@ from simsteer.core.calibration import Calibration
 from simsteer.core.model import DrivingModel
 from simsteer.core.postprocess import decode, desired_curvature
 from simsteer.core.preprocess import FrameQueue
+from simsteer.core.supercombo import SupercomboModel
 from simsteer.ui.overlay import draw_overlay
 
 from beamng.world import BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG, CAM_HEIGHT_M, CAM_LATERAL_SIGN
@@ -46,6 +47,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ai", action="store_true", help="BeamNG AI drives")
     ap.add_argument("--scale", type=float, default=0.8, help="window scale")
+    ap.add_argument("--supercombo", action="store_true",
+                    help="run the unified driving_supercombo.onnx (2026 master) "
+                         "instead of the split vision+policy pair")
     args = ap.parse_args()
 
     calib = Calibration(image_w=CAM_W, image_h=CAM_H,
@@ -58,10 +62,19 @@ def main() -> int:
     world = BeamNGOnnxWorld()
 
     print("[view] loading model (ROCm -> CPU fallback) ...", flush=True)
-    model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
-                         policy_providers=["CPUExecutionProvider"],
-                         intra_op_threads=3)
-    print(f"[view] vision provider: {model.active_provider}", flush=True)
+    if args.supercombo:
+        model = SupercomboModel(
+            providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+            intra_op_threads=3)
+        step_decode = lambda i, b: model.decode(model.step(i, b))
+        print(f"[view] supercombo {model.checkpoint} on {model.active_provider}",
+              flush=True)
+    else:
+        model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+                             policy_providers=["CPUExecutionProvider"],
+                             intra_op_threads=3)
+        step_decode = lambda i, b: decode(*model.step(i, b))
+        print(f"[view] vision provider: {model.active_provider}", flush=True)
     queue = FrameQueue()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, int(CAM_W * args.scale), int(CAM_H * args.scale))
@@ -84,7 +97,7 @@ def main() -> int:
                 continue
 
             img, big_img = queue.push(bgr, calib)
-            d = decode(*model.step(img, big_img))
+            d = step_decode(img, big_img)
 
             # telemetry at ~2 Hz is plenty for the HUD
             if t0 - tel_t > 0.5:
