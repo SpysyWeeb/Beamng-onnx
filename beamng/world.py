@@ -137,12 +137,17 @@ class BeamNGOnnxWorld:
 
     # ---- control (M3) ----
 
-    def apply(self, steering: float, throttle: float, brake: float) -> None:
+    def apply(self, steering: float, throttle: float | None,
+              brake: float | None) -> None:
         """Steering goes through input.event FILTER_DIRECT (2): measured
         t90 0.08 s vs 0.28 s via vehicle.control(), which also applies
         speed-sensitive limiting. Direct is linear and instant — the
         rack LiveParams fits is then actually the rack, not the input
         smoother. Throttle/brake keep the normal control() path.
+
+        Pass throttle=None and brake=None for steering-only: no
+        control() call at all, so the player's own pedal inputs are
+        NOT overwritten (sending 0/0 at 20 Hz stomps them).
 
         _ctl_lock serialises with poll_telemetry(): both use the same
         per-vehicle TCP connection (bridge lesson — races hang it)."""
@@ -150,8 +155,10 @@ class BeamNGOnnxWorld:
         with self._ctl_lock:
             self.vehicle.queue_lua_command(
                 f"input.event('steering', {s:.4f}, 2)")
-            self.vehicle.control(throttle=float(np.clip(throttle, 0, 1)),
-                                 brake=float(np.clip(brake, 0, 1)))
+            if throttle is not None or brake is not None:
+                self.vehicle.control(
+                    throttle=float(np.clip(throttle or 0.0, 0, 1)),
+                    brake=float(np.clip(brake or 0.0, 0, 1)))
 
     # ---- misc ----
 

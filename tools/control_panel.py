@@ -140,7 +140,7 @@ class ModBridge(threading.Thread):
         s = ("ENGAGED" if app.engaged else
              ("CAL" if app.cal_active else "manual"))
         line = (f"{s} | {v:.0f} mph | cap {cap:.0f} | "
-                f"long {'on' if app.long_enabled else 'off'}")
+                f"long {app.long_mode}")
         if app.desire_idx is not None:
             line += f" | {DESIRE_NAME[app.desire_idx]}"
         return line
@@ -209,8 +209,9 @@ class Panel:
                 lab = "DISENGAGE" if app.engaged else "ENGAGE"
                 col = (60, 60, 200) if app.engaged else (60, 160, 60)
             elif key == "long":
-                lab = f"LONG {'ON' if app.long_enabled else 'off'}"
-                col = (90, 120, 60) if app.long_enabled else (70, 70, 70)
+                lab = f"LONG: {app.long_mode.upper()}"
+                col = {"exp": (60, 120, 160), "chill": (90, 120, 60),
+                       "off": (70, 70, 70)}[app.long_mode]
             elif key == "ai":
                 lab = f"AI {'ON' if app.ai_on else 'off'}"
                 col = (140, 90, 40) if app.ai_on else (70, 70, 70)
@@ -270,7 +271,9 @@ class App:
         self.long = LongitudinalController(cfg)
 
         self.engaged = False
-        self.long_enabled = True
+        # exp: model's e2e accel; chill: cruise at cap + leads/corners;
+        # off: user owns the pedals, model steers only.
+        self.long_mode = "exp"
         self.ai_on = False
         self.frame_idx = 0
         self.desire_idx: int | None = None
@@ -326,8 +329,12 @@ class App:
             self.desire_until = now + DESIRE_HOLD_S[idx]
             self.set_banner(f"desire: {DESIRE_NAME[idx]}")
         elif key == "long":
-            self.long_enabled = not self.long_enabled
-            self.set_banner(f"longitudinal {'ON' if self.long_enabled else 'OFF'}")
+            order = ["exp", "chill", "off"]
+            self.long_mode = order[(order.index(self.long_mode) + 1) % 3]
+            desc = {"exp": "EXPERIMENTAL (model drives the pedals)",
+                    "chill": "CHILL (cruise at cap, brake for leads)",
+                    "off": "OFF (your pedals, model steers)"}
+            self.set_banner(f"long: {desc[self.long_mode]}", 3.0)
         elif key == "ai":
             self.ai_on = not self.ai_on
             if self.ai_on:
@@ -422,9 +429,14 @@ class App:
                                      actual_wheel_angle=wheel,
                                      lane_change_command_active=lane_change_cmd,
                                      dt=dt)
-            if self.long_enabled:
-                thr, brk = self.long.compute(decoded, v_ego)
-            self.world.apply(steer, thr, brk)
+            if self.long_mode == "off":
+                # steering only — no throttle/brake API calls, so the
+                # player's own pedal inputs pass through untouched
+                self.world.apply(steer, None, None)
+            else:
+                thr, brk = self.long.compute(decoded, v_ego,
+                                             mode=self.long_mode)
+                self.world.apply(steer, thr, brk)
             commanded = steer
 
         # Feed the learner: our command while we drive, the game's own

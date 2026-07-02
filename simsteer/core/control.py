@@ -539,7 +539,13 @@ class LongitudinalController:
         self.last_lead_ttc = float("inf")
         self.last_aeb = False
 
-    def compute(self, decoded: Decoded, v_ego: float) -> tuple[float, float]:
+    def compute(self, decoded: Decoded, v_ego: float,
+                mode: str = "exp") -> tuple[float, float]:
+        """mode='exp': end-to-end — follow the model's own planned
+        velocity/acceleration (slows for intersections, scene-dependent
+        stops). mode='chill': classic ACC — cruise at max_speed_mps;
+        the model's plan is used only for corner anticipation, and the
+        vision leads for following/AEB."""
         cfg = self.cfg
 
         v_plan = decoded.plan[:, 3]   # vel_x over the 33 plan timesteps
@@ -550,8 +556,12 @@ class LongitudinalController:
         # static steerActuatorDelay) + the anticipation buffer for
         # seeing corners coming.
         t = max(0.0, float(cfg.lookahead_s) + float(cfg.long_anticipation_s))
-        v_target = float(np.interp(t, self._T_IDXS, v_plan))
-        a_target = float(np.interp(t, self._T_IDXS, a_plan))
+        if mode == "chill":
+            v_target = float(cfg.max_speed_mps)
+            a_target = 0.0
+        else:
+            v_target = float(np.interp(t, self._T_IDXS, v_plan))
+            a_target = float(np.interp(t, self._T_IDXS, a_plan))
 
         # Corner anticipation: find the tightest upcoming planned
         # curvature within `corner_scan_horizon_s` and override v_target
