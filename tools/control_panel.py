@@ -602,6 +602,11 @@ class App:
             if self._cal_phase == "settle":
                 self.world.apply(0.0, 0.0, 0.2)   # post-teleport physics
                 if phase_t > 2.0:
+                    # AFTER the teleport: teleporting resets the vehicle
+                    # and drops the box back to neutral — shifting in
+                    # start_cal() was undone and CAL revved in N
+                    self.world.realistic_gearbox()
+                    self.world.ensure_drive()
                     self._cal_phase, self._cal_t0 = "accel", now
             elif self._cal_phase == "accel":
                 self.world.apply(0.0, 0.45, 0.0)
