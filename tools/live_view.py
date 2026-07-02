@@ -37,7 +37,7 @@ from simsteer.core.postprocess import decode, desired_curvature
 from simsteer.core.preprocess import FrameQueue
 from simsteer.ui.overlay import draw_overlay
 
-from beamng.world import BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG
+from beamng.world import BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG, CAM_HEIGHT_M
 
 WINDOW = "Beamng-onnx — model plan"
 
@@ -49,7 +49,7 @@ def main() -> int:
     args = ap.parse_args()
 
     calib = Calibration(image_w=CAM_W, image_h=CAM_H,
-                        fov_h_deg=CAM_FOV_H_DEG, height_m=1.4)
+                        fov_h_deg=CAM_FOV_H_DEG, height_m=CAM_HEIGHT_M)
 
     print("[view] loading model (CPU) ...", flush=True)
     model = DrivingModel(providers=["CPUExecutionProvider"],

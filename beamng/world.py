@@ -30,10 +30,15 @@ VEHICLE_MODEL = "bastion"
 SPAWN_POS = (-829.5, -499.0, 106.8)
 SPAWN_ROT_QUAT = (0.0, 0.0, -0.9272, 0.3746)
 
-# Camera mount relative to the vehicle (BeamNG vehicles face -Y):
-# roughly windshield-top, ~1.4 m above the road.
-CAM_POS = (0.0, -1.45, 1.38)
+# Camera mount relative to the vehicle (BeamNG vehicles face -Y): top-center
+# of the windshield glass, where a comma device is installed. Chosen from a
+# 4-mount probe (tools/camera_probe.py, 2026-07-02): shows the hood dome at
+# the frame bottom like real comma footage, with none of the glass-streak /
+# dashboard / hood-LOD artifacts the deeper in-cabin mounts render, and the
+# tightest model lane-width consistency (3.46-3.49 m gaps).
+CAM_POS = (0.0, -0.90, 1.30)
 CAM_DIR = (0.0, -1.0, 0.0)
+CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 
 CAM_W, CAM_H = 1664, 832
 CAM_FOV_H_DEG = 100.0
