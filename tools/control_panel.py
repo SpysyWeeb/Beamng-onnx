@@ -164,6 +164,43 @@ MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
             "cal", "ai", "spd_dn", "spd_up", "cam"}
 
 
+class ControlSender(threading.Thread):
+    """Fire-and-forget vehicle control: world.apply() is a synchronous
+    TCP round-trip (~8 ms measured, worse under game load) — off the
+    20 Hz loop it goes. Mailbox semantics: only the LATEST command is
+    sent; if the game stalls we skip stale intermediates rather than
+    queue them (world._ctl_lock already serializes vs telemetry)."""
+
+    def __init__(self, world: BeamNGOnnxWorld):
+        super().__init__(daemon=True, name="ctl-sender")
+        self.world = world
+        self._latest: tuple | None = None
+        self._ev = threading.Event()
+        self._stop = threading.Event()
+
+    def submit(self, steer: float, thr: float | None,
+               brk: float | None) -> None:
+        self._latest = (steer, thr, brk)
+        self._ev.set()
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            if not self._ev.wait(timeout=0.5):
+                continue
+            self._ev.clear()
+            cmd = self._latest
+            if cmd is None:
+                continue
+            try:
+                self.world.apply(*cmd)
+            except Exception:
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._ev.set()
+
+
 class ModBridge(threading.Thread):
     """UDP link to the in-game imgui panel (beamng_mod/onnx-panel).
 
@@ -325,6 +362,8 @@ class App:
         self.queue = FrameQueue()
         self.tel = Telemetry(self.world)
         self.tel.start()
+        self.sender = ControlSender(self.world)
+        self.sender.start()
 
         # In-game imgui panel (beamng_mod/): load the extension if the
         # mod is mounted; harmless no-op inside pcall when it isn't.
@@ -765,11 +804,11 @@ class App:
             if self.long_mode == "off":
                 # steering only — no throttle/brake API calls, so the
                 # player's own pedal inputs pass through untouched
-                self.world.apply(steer, None, None)
+                self.sender.submit(steer, None, None)
             else:
                 thr, brk = self.long.compute(decoded, v_ego,
                                              mode=self.long_mode)
-                self.world.apply(steer, thr, brk)
+                self.sender.submit(steer, thr, brk)
             commanded = steer
 
         # Feed the learners: our command while we drive, the game's own
@@ -1207,24 +1246,31 @@ def main() -> int:
                     f"loop {app.hz_ema:.0f} Hz < 20: model time-warped"
                     " - lower game graphics or use a smaller model", 6.0)
 
+            # UI at 10 Hz: rendering the window costs ~7 ms/frame that
+            # the model loop can't spare under big-model contention.
+            # Control/logging/charts data stay 20 Hz; only the pixels
+            # skip. Incident capture forces a draw for its snapshot.
             t_d = time.monotonic()
-            canvas[:CAM_VIEW_H] = cv2.resize(
-                draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
-                interpolation=cv2.INTER_AREA)
-            if app.charts_on:
-                draw_charts(canvas, app)
-            draw_telemetry(canvas, app, tel, v_ego)
-            canvas[btn_y0 - 4:] = 24
-            panel.draw(canvas)
-            hud_y = btn_y0 + 2 * BTN_ROW_H + 14
-            for i, line in enumerate(app.hud_lines(d, v_ego)):
-                cv2.putText(canvas, line, (10, hud_y + 17 * i), FONT,
-                            0.4, (230, 230, 230), 1, cv2.LINE_AA)
-            if time.monotonic() < app.banner_until:
-                cv2.putText(canvas, app.banner, (16, 34), FONT, 0.7,
-                            (0, 0, 0), 4, cv2.LINE_AA)
-                cv2.putText(canvas, app.banner, (16, 34), FONT, 0.7,
-                            (80, 220, 255), 2, cv2.LINE_AA)
+            do_draw = bool(app.incident_note) or (app.frame_idx & 1) == 0
+            if do_draw:
+                canvas[:CAM_VIEW_H] = cv2.resize(
+                    draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
+                    interpolation=cv2.INTER_AREA)
+                if app.charts_on:
+                    draw_charts(canvas, app)
+                draw_telemetry(canvas, app, tel, v_ego)
+                canvas[btn_y0 - 4:] = 24
+                panel.draw(canvas)
+                hud_y = btn_y0 + 2 * BTN_ROW_H + 14
+                for i, line in enumerate(app.hud_lines(d, v_ego)):
+                    cv2.putText(canvas, line, (10, hud_y + 17 * i),
+                                FONT, 0.4, (230, 230, 230), 1,
+                                cv2.LINE_AA)
+                if time.monotonic() < app.banner_until:
+                    cv2.putText(canvas, app.banner, (16, 34), FONT,
+                                0.7, (0, 0, 0), 4, cv2.LINE_AA)
+                    cv2.putText(canvas, app.banner, (16, 34), FONT,
+                                0.7, (80, 220, 255), 2, cv2.LINE_AA)
             if app.incident_note:
                 inc_dir = os.path.join(ROOT, "debug_out", "incidents")
                 os.makedirs(inc_dir, exist_ok=True)
@@ -1236,7 +1282,8 @@ def main() -> int:
                       flush=True)
                 app.incident_note = None
 
-            cv2.imshow(WINDOW, canvas)
+            if do_draw:
+                cv2.imshow(WINDOW, canvas)
             perf["draw"] += time.monotonic() - t_d
             perf["n"] += 1
             if perf["n"] >= 100:
@@ -1301,6 +1348,7 @@ def main() -> int:
                 app._log_f.close()
         except Exception:
             pass
+        app.sender.stop()
         app.world.apply(0.0, 0.0, 0.0)
         bridge.stop()
         app.tel.stop()
