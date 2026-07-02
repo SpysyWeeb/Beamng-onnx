@@ -128,8 +128,14 @@ class ControllerConfig:
     # real EPS and passenger comfort, and 3.0 lateral g is exactly why
     # real openpilot balks at sharp city corners. The sim car grips
     # ~8+ m/s^2, so run "strong car" bounds: 2x wheel rate, 4.5 g cap.
+    # jerk 10 keeps the fast city wheel; the accel clamp comes back
+    # DOWN to 3.5 — at 4.5 the e2e plan's natural inside-line bias
+    # executed at full strength (geometry audit exonerated the inputs:
+    # vx ratio 0.995, yaw 1.028), cutting curves hard enough to cross
+    # lines and trigger unprompted lane commits. Real openpilot's 3.0
+    # is partly what suppresses curve-cutting.
     lat_jerk_max_mps3: float | None = 10.0
-    lat_accel_max_mps2: float = 4.5
+    lat_accel_max_mps2: float = 3.5
     # First-order smoothing on the final steering axis — emulated EPS
     # actuator dynamics. A real steering motor is a mechanical low-pass
     # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
@@ -290,7 +296,7 @@ class ControllerConfig:
     # MUST NOT exceed lat_accel_max_mps2 (the ISO clamp on commanded
     # curvature): if long carries more speed into a bend than lateral
     # is allowed to use, the car understeers off the curve. Matched.
-    max_lat_accel_mps2: float = 4.5
+    max_lat_accel_mps2: float = 3.5
     # How far ahead in the plan to scan for the tightest upcoming
     # corner. Should be ≥ long_anticipation_s. Default 6 s covers
     # ~150 m at 25 m/s and ~200 m at 33 m/s — long enough to register

@@ -334,6 +334,11 @@ class App:
         self.hz = 0.0
         self._signal_state: str | None = None
         self._off_ema = 0.0
+        # flight recorder: capture what the model saw when its plan
+        # velocity collapses mid-drive (the "stops on open highway"
+        # mystery) — main loop writes the frame+state on request
+        self._incident_t = 0.0
+        self.incident_note: str | None = None
 
     # ---- UI actions ----
 
@@ -493,11 +498,14 @@ class App:
         self.lp.session_samples = 1000
         self.lp.save()
 
-        # Actuation lag by cross-correlation over the pulse train: the
-        # frame shift where command best predicts wheel response. This
-        # measures the game path only; the engaged loop adds our own
-        # EPS-emulation filter, so lookahead = lag + steer_smooth_s
-        # (the direct openpilot steerActuatorDelay analog).
+        # Loop lag by cross-correlation over the pulse train (command
+        # vs model-pose wheel response) — measured ~300 ms, but that
+        # CONFLATES perception (render + camera + inference, ~200 ms)
+        # with actuation. The model's plan is already expressed in
+        # camera-time, so only the ACTUATION side belongs in the
+        # steerActuatorDelay analog: direct-input t90 (~0.08 s) + our
+        # EPS-emulation filter. Using the full 300 ms made the car turn
+        # in early AND hard ("takes curves sharper than it needs to").
         lag_s = 0.0
         if len(self._cal_series) > 40:
             ax = np.array([p[0] for p in self._cal_series])
@@ -512,8 +520,8 @@ class App:
                 c = float(np.mean((a_s - a_s.mean()) * (w_s - w_s.mean())) / sd)
                 if c > best_c:
                     best_c, lag_s = c, k * 0.05
-            self.cfg.lookahead_s = float(np.clip(
-                lag_s + self.cfg.steer_smooth_s, 0.10, 0.60))
+        self.cfg.lookahead_s = float(np.clip(
+            0.10 + self.cfg.steer_smooth_s, 0.10, 0.40))
 
         # Pedal-map fit: achieved accel vs pedal position, slope with
         # intercept (the intercept absorbs drag/rolling resistance —
@@ -686,6 +694,21 @@ class App:
 
         self.last_steer, self.last_thr, self.last_brk = steer, thr, brk
 
+        # flight recorder trigger: engaged, moving, and the plan's
+        # velocity target collapsed well below current speed with no
+        # lead engaged — capture the scene (throttled to 1 per 4 s)
+        if (self.engaged and v_ego > 8.0
+                and self.long.last_v_target < 0.5 * v_ego
+                and self.long.last_lead_x > 400
+                and now - self._incident_t > 4.0):
+            self._incident_t = now
+            self.incident_note = (
+                f"v={v_ego:.1f} vT={self.long.last_v_target:.1f} "
+                f"aT={self.long.last_a_target:+.2f} "
+                f"lanes={np.round(decoded.lane_lines_prob, 2).tolist()} "
+                f"leadP={float(decoded.lead_prob[0]):.2f} "
+                f"desire_state={np.round(decoded.desire_state, 2).tolist()}")
+
     # ---- HUD ----
 
     def hud_lines(self, decoded, v_ego: float) -> list[str]:
@@ -805,6 +828,17 @@ def main() -> int:
                 cv2.putText(canvas, app.banner, (CAM_W // 2 - 200, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (80, 220, 255), 2,
                             cv2.LINE_AA)
+            if app.incident_note:
+                inc_dir = os.path.join(ROOT, "debug_out", "incidents")
+                os.makedirs(inc_dir, exist_ok=True)
+                stamp = time.strftime("%H%M%S")
+                cv2.imwrite(os.path.join(inc_dir, f"stop_{stamp}.png"), canvas)
+                with open(os.path.join(inc_dir, f"stop_{stamp}.txt"), "w") as f:
+                    f.write(app.incident_note + "\n")
+                print(f"[panel] INCIDENT captured: {app.incident_note}",
+                      flush=True)
+                app.incident_note = None
+
             cv2.imshow(WINDOW, canvas)
 
             key = cv2.waitKey(1) & 0xFF
