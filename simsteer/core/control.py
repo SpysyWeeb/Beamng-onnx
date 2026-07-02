@@ -165,10 +165,16 @@ class ControllerConfig:
     # where axis_trim is the dynamic correction and axis_bias is the
     # static user knob — both serve their own role.
     wheel_trim_enabled: bool = True
-    # Integrator gain. Output (axis) per (rad·s) of LPF'd error. With
-    # gain=0.005, a sustained 0.1 rad error grows trim by 0.0005/s —
-    # ~10 s to traverse the full clip range. Slow on purpose.
-    wheel_trim_gain: float = 0.005
+    # Integrator gain. Output (axis) per (rad·s) of LPF'd error. The
+    # original 0.005 was sized for 0.1-rad-scale errors; a REAL steady
+    # bias (road crown / axis offset) is ~0.002 rad of wheel angle —
+    # the field chart showed the desired-vs-actual curvature traces
+    # riding a constant step apart (want +0.5, act -0.1 x1000) that
+    # 0.005 would have needed an hour to cancel. 0.5 closes it in
+    # ~5-10 s and is still slow against the wheel: loop crossover
+    # ~0.04 Hz (gain x dwheel/daxis ~ 0.5/rack_a), ~70 deg phase
+    # margin with the 1 s error LPF.
+    wheel_trim_gain: float = 0.5
     # Hard clip on the integrator output. ±0.05 axis is enough to
     # cancel a typical steady-state offset without ever dominating
     # the FF axis.

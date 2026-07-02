@@ -344,6 +344,16 @@ class LiveParams:
         # gain is correspondingly smaller.
         p_init = self._gates["P_init"]
         self.P = np.diag(p_init)
+        # MATURE restore: a fit with 500+ samples behind it (CAL
+        # system-ID installs 1000) is a measurement, not a guess.
+        # Restoring it with the cold-start P told the filter the value
+        # was nearly worthless, and one stretch of degenerate straight-
+        # highway samples wandered a=2.0 down to 0.84 within minutes
+        # of a relaunch (field: understeer, act-curvature compressed
+        # vs want). Same tight P as the CAL install — Q keeps it
+        # adapting, just at prior-respecting speed.
+        if loaded.samples >= 500:
+            self.P = np.diag((0.25, 1e-6, 1e-4))
         # Process noise (Kalman Q) — added each RLS step to keep the
         # covariance from collapsing to zero (which would freeze the
         # state) and to let the state slowly drift between samples,
