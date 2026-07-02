@@ -60,7 +60,9 @@ from simsteer.ui.overlay import draw_overlay
 from beamng.world import (BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG,
                           CAM_HEIGHT_M, CAM_LATERAL_SIGN)
 
-WINDOW = "Beamng-onnx — control panel"
+# ASCII only: cv2's Qt backend fails setMouseCallback ("NULL window
+# handler") when the window name contains non-ASCII (e.g. an em-dash).
+WINDOW = "Beamng-onnx control panel"
 WHEELBASE_M = 2.9          # bastion-ish; constant error folds into LiveParams
 PANEL_H = 96               # button strip + HUD height (px)
 DESIRE_HOLD_S = {1: 3.0, 2: 3.0, 3: 2.5, 4: 2.5}   # turn L/R, lane L/R
@@ -390,12 +392,26 @@ def main() -> int:
     panel = Panel(app)
     panel.layout(CAM_H + 4)
 
+    canvas = np.zeros((CAM_H + PANEL_H, CAM_W, 3), dtype=np.uint8)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, int(CAM_W * args.scale),
                      int((CAM_H + PANEL_H) * args.scale))
-    cv2.setMouseCallback(WINDOW, panel.on_mouse)
-
-    canvas = np.zeros((CAM_H + PANEL_H, CAM_W, 3), dtype=np.uint8)
+    # Qt backend realizes the window asynchronously — setMouseCallback
+    # throws "NULL window handler" until the event loop has actually
+    # created it. Pump the loop and retry; fall back to keyboard-only.
+    mouse_ok = False
+    for _ in range(20):
+        cv2.imshow(WINDOW, canvas)
+        cv2.waitKey(20)
+        try:
+            cv2.setMouseCallback(WINDOW, panel.on_mouse)
+            mouse_ok = True
+            break
+        except cv2.error:
+            time.sleep(0.05)
+    if not mouse_ok:
+        print("[panel] WARNING: mouse buttons unavailable in this cv2 "
+              "build — use the keyboard bindings (see --help)", flush=True)
     last = time.monotonic()
     try:
         while True:
