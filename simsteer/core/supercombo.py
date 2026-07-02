@@ -75,8 +75,10 @@ class SupercomboModel:
                  model_path: str | None = None) -> None:
         if providers is None:
             providers = ["CPUExecutionProvider"]
-        self.session = _make_session(model_path or SUPERCOMBO_PATH,
-                                     providers, intra_op_threads)
+        from pathlib import Path
+        self.session = _make_session(
+            Path(model_path) if model_path else SUPERCOMBO_PATH,
+            providers, intra_op_threads)
         self.active_provider = self.session.get_providers()[0]
 
         meta = self.session.get_modelmeta().custom_metadata_map
