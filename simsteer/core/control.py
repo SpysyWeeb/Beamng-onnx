@@ -130,6 +130,14 @@ class ControllerConfig:
     # ~8+ m/s^2, so run "strong car" bounds: 2x wheel rate, 4.5 g cap.
     lat_jerk_max_mps3: float | None = 10.0
     lat_accel_max_mps2: float = 4.5
+    # First-order smoothing on the final steering axis — emulated EPS
+    # actuator dynamics. A real steering motor is a mechanical low-pass
+    # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
+    # the EPS does the smoothing); our FILTER_DIRECT input has none, so
+    # the plan's frame-to-frame flicker reaches the wheel raw and the
+    # model watches its own twitch through the camera. tau 0.1 s ~
+    # t90 0.23 s, comparable to a quick EPS. 0 disables.
+    steer_smooth_s: float = 0.1
 
     # Speed-dependent steering response (variable-ratio rack in ETS2
     # and most games) is handled inside LiveParams now — it fits a
@@ -349,6 +357,8 @@ class LateralController:
         # Last-frame trim freeze reason — for HUD diagnostics. Empty
         # string when the integrator was running.
         self.last_trim_frozen_reason = ""
+        # Emulated-EPS smoothing state (see cfg.steer_smooth_s).
+        self._axis_smooth = 0.0
 
     def reset(self) -> None:
         """Drop derived state. Call on disengage/re-engage transitions
@@ -362,6 +372,7 @@ class LateralController:
         self.axis_trim_state = 0.0
         self.lpf_wheel_error = 0.0
         self.last_trim_frozen_reason = ""
+        self._axis_smooth = 0.0
 
     def compute(self, decoded: Decoded, v_ego: float,
                 actual_wheel_angle: float | None = None,
@@ -378,6 +389,7 @@ class LateralController:
             self.last_axis = 0.0
             self.last_in_lane_change = False
             self.last_authority = 0.0
+            self._axis_smooth = 0.0
             return 0.0
 
         # Plan-following via openpilot's `get_lag_adjusted_curvature`:
@@ -488,6 +500,15 @@ class LateralController:
         # the dynamic auto-knob. Both stack additively on top of FF.
         axis = axis_ff + self.axis_trim_state + cfg.axis_bias
         axis = max(-cfg.steer_max, min(cfg.steer_max, axis))
+        # Emulated EPS: first-order low-pass on the final axis. The
+        # direct game input has no actuator dynamics, so without this
+        # every 20 Hz plan flicker reaches the wheel raw.
+        if cfg.steer_smooth_s > 0:
+            alpha = 1.0 - math.exp(-dt / cfg.steer_smooth_s)
+            self._axis_smooth += alpha * (axis - self._axis_smooth)
+            axis = self._axis_smooth
+        else:
+            self._axis_smooth = axis
         self.last_axis = axis
         return axis
 
