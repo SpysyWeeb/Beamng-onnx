@@ -61,6 +61,8 @@ def fov_v_deg(fov_h_deg: float, w: int, h: int) -> float:
 class BeamNGOnnxWorld:
     def __init__(self, host: str = HOST, port: int = PORT):
         print(f"[world] connecting to BeamNG at {host}:{port} ...", flush=True)
+        import threading
+        self._ctl_lock = threading.Lock()
         self.bng = BeamNGpy(host, port)
         self.bng.open(launch=False)
 
@@ -116,20 +118,40 @@ class BeamNGOnnxWorld:
     # ---- telemetry ----
 
     def poll_telemetry(self) -> dict:
-        """v_ego (m/s), steering wheel angle (deg), from Electrics."""
-        self.vehicle.sensors.poll()
+        """v_ego (m/s), steering wheel angle (deg), normalized steering
+        input (-1..1), and world heading (rad, CCW+) from Electrics +
+        vehicle state. One TCP round-trip (~few ms) — poll from a side
+        thread, not the 20 Hz model loop."""
+        with self._ctl_lock:
+            self.vehicle.sensors.poll()
         el = self.vehicle.sensors["electrics"]
+        st = self.vehicle.state or {}
+        d = st.get("dir", (0.0, -1.0, 0.0))
         return {
             "v_ego": float(el.get("wheelspeed", 0.0)),
             "steering_deg": float(el.get("steering", 0.0)),
+            "steering_input": float(el.get("steering_input", 0.0)),
+            "heading_rad": math.atan2(float(d[1]), float(d[0])),
+            "pos": tuple(st.get("pos", (0.0, 0.0, 0.0))),
         }
 
     # ---- control (M3) ----
 
     def apply(self, steering: float, throttle: float, brake: float) -> None:
-        self.vehicle.control(steering=float(np.clip(steering, -1, 1)),
-                             throttle=float(np.clip(throttle, 0, 1)),
-                             brake=float(np.clip(brake, 0, 1)))
+        """Steering goes through input.event FILTER_DIRECT (2): measured
+        t90 0.08 s vs 0.28 s via vehicle.control(), which also applies
+        speed-sensitive limiting. Direct is linear and instant — the
+        rack LiveParams fits is then actually the rack, not the input
+        smoother. Throttle/brake keep the normal control() path.
+
+        _ctl_lock serialises with poll_telemetry(): both use the same
+        per-vehicle TCP connection (bridge lesson — races hang it)."""
+        s = float(np.clip(steering, -1, 1))
+        with self._ctl_lock:
+            self.vehicle.queue_lua_command(
+                f"input.event('steering', {s:.4f}, 2)")
+            self.vehicle.control(throttle=float(np.clip(throttle, 0, 1)),
+                                 brake=float(np.clip(brake, 0, 1)))
 
     # ---- misc ----
 
@@ -138,6 +160,18 @@ class BeamNGOnnxWorld:
         without closing the loop)."""
         self.vehicle.ai.set_mode("span")
         self.vehicle.ai.set_speed(speed_ms, mode="limit")
+
+    def ai_disable(self) -> None:
+        """Return input authority to us / the player."""
+        self.vehicle.ai.set_mode("disabled")
+
+    def realistic_gearbox(self) -> None:
+        """Required before the model drives: in arcade mode, holding
+        the brake at low speed shifts into REVERSE — the controller
+        'holds the brakes' and the car backs up. Realistic automatic
+        keeps D engaged; brake is just brake."""
+        with self._ctl_lock:
+            self.vehicle.set_shift_mode("realistic_automatic")
 
     def close(self) -> None:
         try:

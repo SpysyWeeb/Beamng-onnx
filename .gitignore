@@ -60,3 +60,4 @@ debug/*_smoke.png
 
 # Vendored openpilot reference files (kept locally for grepping)
 .openpilot_*.py
+debug_out/

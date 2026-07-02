@@ -169,8 +169,8 @@ _GATES_SYNTH_WHEEL = {
 
 def _gates_for(game: str | None) -> dict:
     """Return the gate profile for a game. ETS2 (and unknown) → strict;
-    Forza / AC (synthesized wheel angles) → loose."""
-    if game in ("forza", "ac"):
+    Forza / AC / BeamNG (synthesized wheel angles) → loose."""
+    if game in ("forza", "ac", "beamng"):
         return dict(_GATES_SYNTH_WHEEL)
     return dict(_GATES_DEFAULT)
 
@@ -257,6 +257,13 @@ _INITIAL_SEEDS: dict[tuple[str | None, str | None], tuple[float, float, float]] 
     ("ets2", "wheel"):   (4.0, 0.0,    0.0),
     ("forza", None):     (3.0, 0.0010, 0.0),
     ("ac", None):        (3.0, 0.0010, 0.0),
+    # BeamNG via input.event FILTER_DIRECT (see beamng/world.py):
+    # steering=+1 -> RIGHT turn; in the model's native frame (y
+    # right-positive) that's +wheel, so a is POSITIVE. Direct input is
+    # linear and bypasses the speed limiter: 0.25 axis = 124 deg
+    # steering wheel (495 deg lock) ~ 0.13 rad road wheel -> a ~ 2.0,
+    # b ~ 0 (measured, tools/m3_sign_check.py + step probe).
+    ("beamng", None):    (2.0,  0.0,   0.0),
 }
 
 
