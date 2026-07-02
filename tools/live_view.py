@@ -52,13 +52,17 @@ def main() -> int:
                         fov_h_deg=CAM_FOV_H_DEG, height_m=CAM_HEIGHT_M,
                         lateral_sign=CAM_LATERAL_SIGN)
 
-    print("[view] loading model (CPU) ...", flush=True)
-    model = DrivingModel(providers=["CPUExecutionProvider"],
+    # World FIRST, model second: creating the ORT GPU session after the
+    # level has loaded keeps our VRAM allocations out of BeamNG's
+    # level-load churn (the window that faulted GPU compute on RDNA4).
+    world = BeamNGOnnxWorld()
+
+    print("[view] loading model (ROCm -> CPU fallback) ...", flush=True)
+    model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
                          policy_providers=["CPUExecutionProvider"],
                          intra_op_threads=3)
+    print(f"[view] vision provider: {model.active_provider}", flush=True)
     queue = FrameQueue()
-
-    world = BeamNGOnnxWorld()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, int(CAM_W * args.scale), int(CAM_H * args.scale))
 

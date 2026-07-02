@@ -45,13 +45,14 @@ def main() -> int:
                         fov_h_deg=CAM_FOV_H_DEG, height_m=CAM_HEIGHT_M,
                         lateral_sign=CAM_LATERAL_SIGN)
 
-    print("[m1] loading model (CPU) ...", flush=True)
-    model = DrivingModel(providers=["CPUExecutionProvider"],
+    world = BeamNGOnnxWorld()
+
+    print("[m1] loading model (ROCm -> CPU fallback) ...", flush=True)
+    model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
                          policy_providers=["CPUExecutionProvider"],
                          intra_op_threads=3)
+    print(f"[m1] vision provider: {model.active_provider}", flush=True)
     queue = FrameQueue()
-
-    world = BeamNGOnnxWorld()
     try:
         if args.ai:
             world.ai_drive(25.0)
