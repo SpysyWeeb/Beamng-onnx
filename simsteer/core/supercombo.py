@@ -71,10 +71,12 @@ class SupercomboModel:
     def __init__(self, providers: list[str] | None = None,
                  intra_op_threads: int | None = None,
                  lat_action_t: float = 0.3,
-                 long_action_t: float = 0.5) -> None:
+                 long_action_t: float = 0.5,
+                 model_path: str | None = None) -> None:
         if providers is None:
             providers = ["CPUExecutionProvider"]
-        self.session = _make_session(SUPERCOMBO_PATH, providers, intra_op_threads)
+        self.session = _make_session(model_path or SUPERCOMBO_PATH,
+                                     providers, intra_op_threads)
         self.active_provider = self.session.get_providers()[0]
 
         meta = self.session.get_modelmeta().custom_metadata_map

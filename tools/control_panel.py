@@ -311,12 +311,15 @@ class App:
             self._decode = lambda i, b, d: decode(*self.model.step(i, b, desire=d))
             name = f"split ({self.model.active_provider})"
         else:
+            model_path = getattr(args, "model", None) or None
             self.model = SupercomboModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
-                intra_op_threads=3)
+                intra_op_threads=3, model_path=model_path)
             self._decode = lambda i, b, d: self.model.decode(
                 self.model.step(i, b, desire=d))
-            name = f"supercombo ({self.model.active_provider})"
+            name = (f"supercombo ({self.model.active_provider})"
+                    + (f" [{os.path.basename(model_path)}]"
+                       if model_path else ""))
         print(f"[panel] model: {name}", flush=True)
 
         self.queue = FrameQueue()
@@ -1114,6 +1117,9 @@ def main() -> int:
                     help="hook the vehicle already loaded in-game "
                          "(Freeroam interception) instead of spawning "
                          "our scenario")
+    ap.add_argument("--model", default=None,
+                    help="path to a supercombo-compatible .onnx "
+                         "(default: models/driving_supercombo.onnx)")
     args = ap.parse_args()
 
     app = App(args)

@@ -94,6 +94,42 @@ def scan_levels(install: str) -> list[str]:
     return ["west_coast_usa"] + levels
 
 
+DEFAULT_MODEL = os.path.join(ROOT, "models", "driving_supercombo.onnx")
+BROWSE = "browse for an .onnx file ..."
+# the split 0.11.1 pair — not runnable as a supercombo
+_SPLIT_PAIR = {"driving_vision.onnx", "driving_policy.onnx"}
+
+
+def scan_models() -> list[str]:
+    """Supercombo-compatible .onnx files under models/ (full paths)."""
+    d = os.path.join(ROOT, "models")
+    out = []
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d), key=str.lower):
+            if f.endswith(".onnx") and f not in _SPLIT_PAIR:
+                out.append(os.path.join(d, f))
+    return out or [DEFAULT_MODEL]
+
+
+def browse_onnx() -> str | None:
+    """Native file picker (tkinter ships with the venv python)."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        path = filedialog.askopenfilename(
+            title="Pick a supercombo-compatible .onnx",
+            initialdir=os.path.join(ROOT, "models"),
+            filetypes=[("ONNX model", "*.onnx"), ("all files", "*")])
+        root.destroy()
+        return path or None
+    except Exception as exc:
+        print(f"[start] file dialog unavailable ({exc}) — run the "
+              f"control panel with --model <path> instead", flush=True)
+        return None
+
+
 def port_open(port: int = TECH_PORT) -> bool:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(0.4)
@@ -128,6 +164,10 @@ class StartPanel:
             self.map = self.levels[0]
         self.vehicles = ["bastion"]
         self.vehicle = cfg.get("vehicle", "bastion")
+        self.models = scan_models()
+        self.model = cfg.get("model") or DEFAULT_MODEL
+        if not os.path.isfile(self.model):
+            self.model = self.models[0]
 
         self.focus: str | None = None      # "path" while typing
         self.open_dropdown: str | None = None
@@ -141,7 +181,8 @@ class StartPanel:
 
     def save(self) -> None:
         json.dump({"beamng_path": self.path, "tech_key": self.tech_key,
-                   "map": self.map, "vehicle": self.vehicle},
+                   "map": self.map, "vehicle": self.vehicle,
+                   "model": self.model},
                   open(CONFIG_PATH, "w"), indent=2)
 
     def log(self, msg: str) -> None:
@@ -221,6 +262,12 @@ class StartPanel:
                    "--map", self.map, "--vehicle", self.vehicle]
             if attach:
                 cmd.append("--attach")
+            if os.path.realpath(self.model) != os.path.realpath(
+                    DEFAULT_MODEL):
+                if not os.path.isfile(self.model):
+                    self.log(f"model file missing: {self.model}")
+                    return
+                cmd += ["--model", self.model]
             env = dict(os.environ)
             env.setdefault("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
             subprocess.Popen(cmd, cwd=ROOT, env=env)
@@ -241,6 +288,17 @@ class StartPanel:
                 if bx <= x <= bx + bw and by <= y <= by + bh:
                     if self.open_dropdown == "map":
                         self.map = val
+                    elif self.open_dropdown == "model":
+                        if val == BROWSE:
+                            p = browse_onnx()
+                            if p:
+                                self.model = p
+                                if p not in self.models:
+                                    self.models.append(p)
+                        else:
+                            for m in self.models:
+                                if os.path.basename(m) == val:
+                                    self.model = m
                     else:
                         self.vehicle = val
             self.open_dropdown = None
@@ -253,7 +311,7 @@ class StartPanel:
                 self.focus = "path"
             elif key == "tech":
                 self.tech_key = not self.tech_key
-            elif key in ("map", "vehicle"):
+            elif key in ("map", "vehicle", "model"):
                 self.open_dropdown = key
             elif key == "start":
                 self.start()
@@ -348,8 +406,11 @@ class StartPanel:
         dropdown(560, "vehicle", "VEHICLE", self.vehicle,
                  "CAL gear table + wheelbase are measured for the "
                  "bastion")
+        dropdown(690, "model", "MODEL", os.path.basename(self.model),
+                 "supercombo-compatible .onnx; pick 'browse' in the "
+                 "list to point anywhere on disk")
 
-        y = 700
+        y = 830
         box = (36, y, UI_W - 72, 64)
         self._rects["start"] = box
         col = (60, 160, 60) if (self.tech_key and not self.busy) \
@@ -360,7 +421,7 @@ class StartPanel:
         cv2.putText(c, label, (UI_W // 2 - 60, y + 42), FONT, 0.95,
                     C_WHITE, 2, cv2.LINE_AA)
 
-        y = 820
+        y = 950
         cv2.putText(c, "STATUS", (36, y), FONT, 0.55, C_LABEL, 1,
                     cv2.LINE_AA)
         for i, line in enumerate(self.status[-8:]):
@@ -374,15 +435,21 @@ class StartPanel:
         # dropdown overlay drawn last so it sits on top
         self._drop_rects.clear()
         if self.open_dropdown:
-            opts = self.levels if self.open_dropdown == "map" \
-                else self.vehicles
+            if self.open_dropdown == "map":
+                opts = self.levels
+            elif self.open_dropdown == "model":
+                opts = [os.path.basename(m) for m in self.models] \
+                    + [BROWSE]
+            else:
+                opts = self.vehicles
             bx, by, bw, _ = self._rects[self.open_dropdown]
             oy = by + 46
             for opt in opts[:16]:
                 r = (bx, oy, bw, 34)
                 self._drop_rects.append((r, opt))
-                cur = opt == (self.map if self.open_dropdown == "map"
-                              else self.vehicle)
+                cur = opt == {"map": self.map,
+                              "model": os.path.basename(self.model),
+                              "vehicle": self.vehicle}[self.open_dropdown]
                 cv2.rectangle(c, (r[0], r[1]), (r[0] + r[2], r[1] + r[3]),
                               (58, 46, 30) if cur else (38, 30, 20), -1)
                 cv2.rectangle(c, (r[0], r[1]), (r[0] + r[2], r[1] + r[3]),
