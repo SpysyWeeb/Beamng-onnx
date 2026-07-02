@@ -250,15 +250,18 @@ class ControllerConfig:
     # Proportional on the LPF'd error between what we commanded ~0.3 s
     # ago and what the car actually did (dv/dt). Corrects pedal-map
     # residuals, load, slopes, damage — live. 0 disables.
-    # GENTLE by necessity: this loop carries ~1 s of total delay
-    # (setpoint history + two LPFs + pedal response) — at P=0.4 it
-    # oscillated, shoving the command across the coast gap every few
-    # seconds (field report: 'gassing and braking over and over');
-    # the 0.12 detune STILL cycled in the field. OFF by default until
-    # run logs show a steady-state error it would actually fix — the
-    # pedal tables + speed-I already cover drag and map residuals.
+    # This loop carries ~1 s of total delay (setpoint history + LPFs +
+    # pedal response). P-dominant designs oscillated here TWICE (0.4
+    # and even 0.12 cycled gas/brake in the field) — so the loop is
+    # INTEGRAL-dominant: accel_fb_i (1/s) integrates the LPF'd error,
+    # which rejects the steady want-vs-act accel gap the charts showed
+    # (+0.8 wanted, +0.1 delivered: pedal maps measured at one speed/
+    # gear under-deliver in others) while staying blind to jitter and
+    # phase-safe against the delay. accel_fb_p stays available but
+    # defaults to 0.
     accel_fb_p: float = 0.0
-    accel_fb_clip: float = 0.5
+    accel_fb_i: float = 0.4
+    accel_fb_clip: float = 0.8
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
@@ -598,6 +601,7 @@ class LongitudinalController:
         self._v_prev: float | None = None
         self._a_meas = 0.0
         self._a_err_lpf = 0.0
+        self._a_fb_i = 0.0
         from collections import deque as _dq
         self._a_hist = _dq(maxlen=6)
         self.last_a_fb = 0.0
@@ -628,6 +632,7 @@ class LongitudinalController:
         self._v_prev: float | None = None
         self._a_meas = 0.0
         self._a_err_lpf = 0.0
+        self._a_fb_i = 0.0
         from collections import deque as _dq
         self._a_hist = _dq(maxlen=6)
         self.last_a_fb = 0.0
@@ -802,15 +807,29 @@ class LongitudinalController:
         self._v_prev = v_ego
         setpoint = a_cmd
         self._a_hist.append(setpoint)
-        fb = 0.0
-        if (cfg.accel_fb_p > 0 and not aeb and v_ego > 2.0
-                and len(self._a_hist) == self._a_hist.maxlen):
+        gate = (not aeb and v_ego > 2.0 and self._stop_brake == 0.0
+                and cfg.accel_cmd_min_mps2 < setpoint < cfg.accel_cmd_max_mps2
+                and len(self._a_hist) == self._a_hist.maxlen)
+        if gate:
             err = float(self._a_hist[0]) - self._a_meas
-            self._a_err_lpf += 0.08 * (err - self._a_err_lpf)
-            fb = float(np.clip(cfg.accel_fb_p * self._a_err_lpf,
-                               -cfg.accel_fb_clip, cfg.accel_fb_clip))
+            self._a_err_lpf += 0.15 * (err - self._a_err_lpf)
+            if cfg.accel_fb_i > 0:
+                # INTEGRAL-dominant by design: an integrator only
+                # accumulates PERSISTENT error (the steady want/act gap
+                # in the charts), is blind to frame-to-frame jitter,
+                # and at ki=0.4 crosses over at ~0.06 Hz — stable with
+                # ~67 deg phase margin against this loop's ~1 s delay.
+                # The P design oscillated here twice; don't raise
+                # accel_fb_p above ~0.1 without run-log evidence.
+                self._a_fb_i += cfg.accel_fb_i * self._a_err_lpf * dt
+                self._a_fb_i *= math.exp(-dt / 60.0)     # forget slowly
+                self._a_fb_i = float(np.clip(
+                    self._a_fb_i, -cfg.accel_fb_clip, cfg.accel_fb_clip))
         else:
             self._a_err_lpf *= 0.9
+        fb = float(np.clip(
+            cfg.accel_fb_p * self._a_err_lpf + self._a_fb_i,
+            -cfg.accel_fb_clip, cfg.accel_fb_clip))
         self.last_a_fb = fb
         a_cmd = setpoint + fb
 
