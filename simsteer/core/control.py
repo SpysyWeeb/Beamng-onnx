@@ -221,9 +221,17 @@ class ControllerConfig:
     long_smooth_s: float = 0.3
     # P term on velocity error (m/s^2 commanded per m/s of error). Keeps
     # the loop tracking the plan's velocity when the FF accel alone
-    # under/overshoots. Small by design — the FF carries most of the
-    # work, this is a trim.
-    speed_p_gain: float = 0.3
+    # under/overshoots.
+    speed_p_gain: float = 0.5
+    # Integral trim on velocity error. A P-only loop droops: holding
+    # speed against drag needs constant throttle, which P can only
+    # produce from a standing error — measured ~4 mph short of the cap
+    # at highway speed. The integrator supplies the drag feedforward.
+    # Gated (no windup while saturated / braking / far from target)
+    # and leaky, mirroring the wheel-trim design.
+    speed_i_gain: float = 0.1
+    speed_i_clip: float = 0.8       # max m/s^2 the integrator may add
+    speed_i_leak_s: float = 30.0
     # Symmetric deadband around 0 m/s^2 — avoids the actuator hunting
     # between throttle and brake when the desired accel is near zero
     # (cruise on flat road). Below this the controller commands 0/0.
@@ -508,6 +516,7 @@ class LongitudinalController:
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
+        self._v_err_i = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         # Corner-anticipation diagnostics for the HUD.
@@ -527,6 +536,7 @@ class LongitudinalController:
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
+        self._v_err_i = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_v_safe_corner = float("inf")
@@ -641,7 +651,21 @@ class LongitudinalController:
         # `max_speed_mps`, we don't follow — the P term then naturally
         # brakes (or eases off throttle) as v_ego approaches the cap.
         v_target = min(v_target, cfg.max_speed_mps)
-        a_cmd = a_target + cfg.speed_p_gain * (v_target - v_ego)
+        v_err = v_target - v_ego
+        a_cmd = a_target + cfg.speed_p_gain * v_err
+
+        # Integral trim (drag feedforward). Integrate only in the
+        # steady regime: rolling, close to target, command not
+        # saturated, no AEB — otherwise it winds up during launches
+        # and braking and dumps it later.
+        dt = 0.05
+        if (v_ego > 3.0 and abs(v_err) < 5.0 and not aeb
+                and cfg.accel_cmd_min_mps2 < a_cmd < cfg.accel_cmd_max_mps2):
+            self._v_err_i += cfg.speed_i_gain * v_err * dt
+            self._v_err_i *= math.exp(-dt / max(cfg.speed_i_leak_s, 1e-3))
+            self._v_err_i = float(np.clip(self._v_err_i,
+                                          -cfg.speed_i_clip, cfg.speed_i_clip))
+        a_cmd += self._v_err_i
         # And belt-and-braces: never command positive accel once we're
         # at/above the cap, even if the plan's a_target was high.
         if v_ego >= cfg.max_speed_mps and a_cmd > 0:
@@ -654,7 +678,6 @@ class LongitudinalController:
         # measure it for us.
         a_cmd = float(np.clip(a_cmd, cfg.accel_cmd_min_mps2,
                               cfg.accel_cmd_max_mps2))
-        dt = 0.05
         if cfg.long_smooth_s > 0:
             alpha = 1.0 - math.exp(-dt / cfg.long_smooth_s)
             self._a_cmd_smooth += alpha * (a_cmd - self._a_cmd_smooth)
@@ -671,13 +694,15 @@ class LongitudinalController:
             a_cmd = -cfg.max_decel_mps2
             self._a_cmd_smooth = a_cmd
 
-        # Deadband around zero so we don't ping-pong between throttle
-        # and brake when the model is happy with current speed.
-        if abs(a_cmd) < cfg.accel_deadband_mps2:
-            throttle, brake = 0.0, 0.0
-        elif a_cmd > 0:
+        # Anti-hunt deadband on the BRAKE side only: between
+        # -deadband and 0 we coast. The throttle side must NOT be
+        # deadbanded — cruising needs small sustained throttle, and
+        # zeroing it forced a droop/limit-cycle below the set speed.
+        if a_cmd > 0:
             throttle = min(1.0, a_cmd / max(cfg.max_accel_mps2, 1e-3))
             brake = 0.0
+        elif a_cmd > -cfg.accel_deadband_mps2:
+            throttle, brake = 0.0, 0.0
         else:
             throttle = 0.0
             brake = min(1.0, -a_cmd / max(cfg.max_decel_mps2, 1e-3))

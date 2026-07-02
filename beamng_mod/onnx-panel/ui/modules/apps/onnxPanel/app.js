@@ -9,6 +9,7 @@ angular.module('beamng.apps')
     link: function (scope, element, attrs) {
       scope.status = 'waiting for control panel ...';
       scope.engaged = false;
+      scope.longMode = '?';
 
       scope.send = function (cmd) {
         bngApi.engineLua('if onnxPanel then onnxPanel.send("' + cmd + '") end');
@@ -19,6 +20,8 @@ angular.module('beamng.apps')
         scope.$evalAsync(function () {
           scope.status = data.text;
           scope.engaged = !!data.engaged;
+          var m = /long (\w+)/.exec(data.text);
+          scope.longMode = m ? m[1].toUpperCase() : '?';
         });
       });
 
