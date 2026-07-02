@@ -175,6 +175,7 @@ class StartPanel:
         self.status: list[str] = ["ready"]
         self.busy = False
         self.launched = False
+        self.close_at = float("inf")   # auto-close after a good START
         self._rects: dict[str, tuple[int, int, int, int]] = {}
         self._drop_rects: list[tuple[tuple[int, int, int, int], str]] = []
 
@@ -281,8 +282,9 @@ class StartPanel:
             subprocess.Popen(prefix + args, cwd=ROOT, env=env)
             self.log("control panel launching - its window appears "
                      "once the scenario loads.")
-            self.log("this launcher can be closed (ESC).")
+            self.log("closing this launcher ...")
             self.launched = True
+            self.close_at = time.monotonic() + 3.0
         finally:
             self.busy = False
 
@@ -489,6 +491,8 @@ def main() -> int:
         key = cv2.waitKey(30) & 0xFF
         if key == 27:
             break
+        if time.monotonic() > panel.close_at:
+            break                     # control panel is on its way
         if key != 255:
             panel.on_key(key)
     panel.save()
