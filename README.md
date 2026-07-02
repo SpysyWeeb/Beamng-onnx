@@ -91,6 +91,20 @@ python tools/camera_probe.py              # camera-mount/FOV verification shots
 position, FOV, `lateral_sign=+1` — BeamNG renders unmirrored, unlike
 upstream's screen-capture games).
 
+### In-game control panel (mod)
+
+`beamng_mod/` ships a tiny GE-Lua mod that draws an imgui window inside
+BeamNG with ENGAGE / lane-change / turn / LONG / CAL buttons, relayed
+over localhost UDP to `tools/control_panel.py` (which sends live status
+back). Install once, then restart the game:
+
+```bash
+bash beamng_mod/install.sh    # copies into the userfolder's mods/unpacked/
+```
+
+The control panel auto-loads the extension on startup; clicks work from
+either the in-game window or the panel window.
+
 ## Upstream docs
 
 simsteer's [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) still describes

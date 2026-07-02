@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import socket
 import sys
 import threading
 import time
@@ -108,6 +109,70 @@ class Telemetry(threading.Thread):
 
     def stop(self) -> None:
         self._stop.set()
+
+
+MOD_PORT = 64257
+MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
+            "cal", "ai", "spd_dn", "spd_up"}
+
+
+class ModBridge(threading.Thread):
+    """UDP link to the in-game imgui panel (beamng_mod/onnx-panel).
+
+    The mod sends button clicks as single-token datagrams; we relay
+    them into App.action(). We push a short status string back to the
+    last-seen client so the in-game window shows engagement state."""
+
+    def __init__(self, app: "App"):
+        super().__init__(daemon=True, name="mod-bridge")
+        self.app = app
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", MOD_PORT))
+        self.sock.settimeout(0.3)
+        self.client = None
+        self._stop = threading.Event()
+
+    def status_line(self) -> str:
+        app = self.app
+        v = app.tel.snapshot()["v_ego"] * 2.237
+        s = ("ENGAGED" if app.engaged else
+             ("CAL" if app.cal_active else "manual"))
+        line = f"{s} | {v:.0f} mph | long {'on' if app.long_enabled else 'off'}"
+        if app.desire_idx is not None:
+            line += f" | {DESIRE_NAME[app.desire_idx]}"
+        return line
+
+    def run(self) -> None:
+        last_push = 0.0
+        while not self._stop.is_set():
+            try:
+                data, addr = self.sock.recvfrom(256)
+                self.client = addr
+                cmd = data.decode("ascii", "ignore").strip()
+                if cmd in MOD_CMDS:
+                    self.app.action(cmd)
+                elif cmd == "hello" and time.monotonic() - last_push > 5:
+                    print("[panel] in-game panel connected", flush=True)
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+            now = time.monotonic()
+            if self.client and now - last_push > 0.4:
+                last_push = now
+                try:
+                    self.sock.sendto(self.status_line().encode("ascii"),
+                                     self.client)
+                except OSError:
+                    pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
 
 class Panel:
@@ -185,6 +250,14 @@ class App:
         self.queue = FrameQueue()
         self.tel = Telemetry(self.world)
         self.tel.start()
+
+        # In-game imgui panel (beamng_mod/): load the extension if the
+        # mod is mounted; harmless no-op inside pcall when it isn't.
+        try:
+            self.world.bng.control.queue_lua_command(
+                "pcall(function() extensions.load('onnxPanel') end)")
+        except Exception as exc:
+            print(f"[panel] in-game panel load skipped: {exc}", flush=True)
 
         cfg = ControllerConfig()
         cfg.wheelbase_m = WHEELBASE_M
@@ -391,6 +464,8 @@ def main() -> int:
     app = App(args)
     panel = Panel(app)
     panel.layout(CAM_H + 4)
+    bridge = ModBridge(app)
+    bridge.start()
 
     canvas = np.zeros((CAM_H + PANEL_H, CAM_W, 3), dtype=np.uint8)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
@@ -495,6 +570,7 @@ def main() -> int:
         except Exception:
             pass
         app.world.apply(0.0, 0.0, 0.0)
+        bridge.stop()
         app.tel.stop()
         app.world.close()
         cv2.destroyAllWindows()
