@@ -116,6 +116,17 @@ class ControllerConfig:
     # delay at 1 ms so negative values can't break the math.
     curvature_anticipation_s: float = 0.0
 
+    # ISO lateral limits (openpilot drive_helpers.clip_curvature,
+    # EU-guideline constants). When lat_jerk_max_mps3 is set the
+    # curvature rate limit becomes jerk/v^2 — fast wheel at city
+    # speeds, gentle at highway speeds — replacing the legacy
+    # speed-interpolated table that starved sharp low-speed turns.
+    # lat_accel_max_mps2 clamps commanded lateral g (the "what the
+    # vehicle is capable of" bound comma assigns per car). Set
+    # lat_jerk_max_mps3 to None to fall back to the legacy table.
+    lat_jerk_max_mps3: float | None = 5.0
+    lat_accel_max_mps2: float = 3.0
+
     # Speed-dependent steering response (variable-ratio rack in ETS2
     # and most games) is handled inside LiveParams now — it fits a
     # `b · wheel · v²` stiffness term, so `axis_for_wheel_angle(...,
@@ -179,13 +190,25 @@ class ControllerConfig:
     # steerActuatorDelay tunable from the tuner.
     long_anticipation_s: float = 1.0
     # m/s^2 of *commanded* acceleration that maps to a full-pressed
-    # throttle (axis=1.0). Lower = more aggressive throttle for the
-    # same target. Trucks typically accelerate at ~1-2 m/s^2; cars at
-    # 3-5. Tune until a "cruise to target speed" feels natural.
-    max_accel_mps2: float = 1.5
-    # Same on the brake side. Lower = more aggressive brake. Comfortable
-    # braking is 3-4 m/s^2; emergency is 6-9.
-    max_decel_mps2: float = 4.0
+    # throttle (axis=1.0). This is a PEDAL SCALE, not a limit — it
+    # should reflect what the vehicle actually does at full pedal, or
+    # a modest command saturates the pedal and the car lunges (a 2
+    # m/s^2 request with scale 1.5 was full throttle = 4-6 m/s^2 in a
+    # BeamNG sedan). The LIMITS live in accel_cmd_max/min below.
+    max_accel_mps2: float = 4.0
+    # Same on the brake side. Full brake in a game car is ~8-10 m/s^2.
+    max_decel_mps2: float = 8.0
+    # Hard clamp on the commanded acceleration — openpilot's ISO
+    # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
+    accel_cmd_max_mps2: float = 2.0
+    accel_cmd_min_mps2: float = -3.5
+    # Longitudinal jerk limits (m/s^3): rate-limit the accel command so
+    # pedal transitions are deliberate, not stabs — this is what gives
+    # openpilot its "weighted" long feel. Asymmetric: releasing toward
+    # positive (brake off / throttle build) may move faster than
+    # ramping the brake in, so post-AEB recovery isn't sluggish.
+    accel_jerk_down_mps3: float = 2.5
+    accel_jerk_up_mps3: float = 4.0
     # P term on velocity error (m/s^2 commanded per m/s of error). Keeps
     # the loop tracking the plan's velocity when the FF accel alone
     # under/overshoots. Small by design — the FF carries most of the
@@ -207,9 +230,11 @@ class ControllerConfig:
     # brake hard for tight bends instead of waiting for the model's
     # (often conservative) planned velocity to drop. 2-3 m/s^2 feels
     # comfortable, 4-5 is firm, 6+ is aggressive. Set 0 to disable.
-    # Default 4.5 (firm): 3.0 braked for gentle/noisy curvature
-    # ("afraid of its own shadow"). Tune live in the tuner's Long section.
-    max_lat_accel_mps2: float = 4.5
+    # MUST NOT exceed lat_accel_max_mps2 (the ISO clamp on commanded
+    # curvature): if long carries more speed into a bend than lateral
+    # is allowed to use, the car understeers off the curve. Matched at
+    # 3.0.
+    max_lat_accel_mps2: float = 3.0
     # How far ahead in the plan to scan for the tightest upcoming
     # corner. Should be ≥ long_anticipation_s. Default 6 s covers
     # ~150 m at 25 m/s and ~200 m at 33 m/s — long enough to register
@@ -353,6 +378,8 @@ class LateralController:
             steer_actuator_delay=cfg.lookahead_s,
             last_desired_curvature=self.last_desired_k_raw,
             extra_buffer_s=cfg.curvature_anticipation_s,
+            lat_jerk_max_mps3=cfg.lat_jerk_max_mps3,
+            lat_accel_max_mps2=cfg.lat_accel_max_mps2,
         )
         self.last_desired_k_raw = k_raw
         k_total = k_raw
@@ -598,7 +625,20 @@ class LongitudinalController:
         # at/above the cap, even if the plan's a_target was high.
         if v_ego >= cfg.max_speed_mps and a_cmd > 0:
             a_cmd = 0.0
-        # AEB override — full brake, ignore the plan and the P term.
+
+        # ISO comfort clamp + jerk rate-limit (openpilot-style). The
+        # e2e plan can request violent accelerations; clamp the command
+        # and ramp it so pedals move deliberately. dt is the 20 Hz
+        # frame (DT_MDL) — callers don't measure it for us.
+        a_cmd = float(np.clip(a_cmd, cfg.accel_cmd_min_mps2,
+                              cfg.accel_cmd_max_mps2))
+        dt = 0.05
+        a_cmd = float(np.clip(
+            a_cmd,
+            self.last_a_cmd - cfg.accel_jerk_down_mps3 * dt,
+            self.last_a_cmd + cfg.accel_jerk_up_mps3 * dt))
+
+        # AEB override — full brake, exempt from the comfort limits.
         if aeb:
             a_cmd = -cfg.max_decel_mps2
 

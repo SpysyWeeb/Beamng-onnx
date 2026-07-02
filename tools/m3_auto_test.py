@@ -27,6 +27,7 @@ sys.path.insert(0, ROOT)
 np.seterr(divide="ignore", invalid="ignore")
 
 from simsteer.core.constants import DESIRE_LEN  # noqa: E402
+from beamng.world import SPAWN_POS, SPAWN_ROT_QUAT  # noqa: E402
 from tools.control_panel import App, WARMUP_FRAMES  # noqa: E402
 
 
@@ -73,8 +74,20 @@ def main() -> int:
             print("[test] FAIL: learner not trusted after calibration")
             return 1
 
-        # AI is still driving post-cal; engage takes over from motion.
-        print("[test] ENGAGING (lat+long) ...", flush=True)
+        # Return to the known straight-highway spawn so every run
+        # engages from the same, comparable location (post-cal the AI
+        # is somewhere nondeterministic — often a city street where an
+        # e2e stop is correct behavior and unmeasurable headlessly).
+        print("[test] teleporting to spawn for a comparable engage ...",
+              flush=True)
+        app.world.ai_disable()
+        app.ai_on = False
+        app.world.vehicle.teleport(SPAWN_POS, rot_quat=SPAWN_ROT_QUAT)
+        t_end = time.monotonic() + 3.0
+        while time.monotonic() < t_end:   # let physics settle + model see
+            step_once(app)
+
+        print("[test] ENGAGING (lat+long) from standstill ...", flush=True)
         app.engage()
         deadline = time.monotonic() + args.seconds
         offs, probs, vs, steers = [], [], [], []

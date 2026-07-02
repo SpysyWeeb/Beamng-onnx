@@ -172,6 +172,8 @@ def desired_curvature_lag_adjusted(
     plan: np.ndarray, v_ego: float, steer_actuator_delay: float,
     last_desired_curvature: float = 0.0,
     extra_buffer_s: float | None = None,
+    lat_jerk_max_mps3: float | None = None,
+    lat_accel_max_mps2: float | None = None,
 ) -> float:
     """Lag-adjusted desired curvature, ported from openpilot's
     `selfdrive/controls/lib/drive_helpers.py:get_lag_adjusted_curvature`.
@@ -225,16 +227,37 @@ def desired_curvature_lag_adjusted(
     # Rate-limit against the previous commanded curvature. This is the
     # mechanism that prevents "steers in too early": a step jump in
     # plan curvature gets ramped over many frames.
-    max_rate = float(np.interp(
-        v, [_MAX_CURV_RATE_LO_V, _MAX_CURV_RATE_HI_V],
-        [_MAX_CURV_RATE_LO, _MAX_CURV_RATE_HI],
-    ))
+    #
+    # Two forms:
+    #  - ISO lateral-jerk (current openpilot, drive_helpers.clip_curvature):
+    #    max_rate = MAX_LATERAL_JERK / v^2. Speed-aware the right way
+    #    around — a slow car may swing the wheel fast (city corners,
+    #    offramps), a fast car may not (no highway wobble). Enabled by
+    #    passing lat_jerk_max_mps3 (openpilot uses 5.0).
+    #  - Legacy speed-interpolated table (older openpilot) otherwise.
+    #    At 10 m/s it allows ~5x LESS wheel rate than ISO, which made
+    #    the model "freak out and stop" in city turns: the plan asked
+    #    for curvature the ramp couldn't reach in time.
+    if lat_jerk_max_mps3 is not None:
+        max_rate = float(lat_jerk_max_mps3) / (v * v)
+    else:
+        max_rate = float(np.interp(
+            v, [_MAX_CURV_RATE_LO_V, _MAX_CURV_RATE_HI_V],
+            [_MAX_CURV_RATE_LO, _MAX_CURV_RATE_HI],
+        ))
     max_delta = max_rate * DT_MDL
     safe_desired_k = float(np.clip(
         desired_k,
         last_desired_curvature - max_delta,
         last_desired_curvature + max_delta,
     ))
+    # openpilot's clip_curvature also clamps the magnitude: lateral
+    # accel (v^2 * k) to +/-3.0 m/s^2, and curvature to +/-0.2 (a turn
+    # radius tighter than most cars can achieve).
+    if lat_accel_max_mps2 is not None:
+        lim = float(lat_accel_max_mps2) / (v * v)
+        safe_desired_k = float(np.clip(safe_desired_k, -lim, lim))
+        safe_desired_k = float(np.clip(safe_desired_k, -0.2, 0.2))
     return safe_desired_k
 
 
