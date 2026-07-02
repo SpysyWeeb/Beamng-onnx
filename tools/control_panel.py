@@ -51,6 +51,7 @@ np.seterr(divide="ignore", invalid="ignore")
 from simsteer.core.calibration import Calibration
 from simsteer.core.constants import DESIRE_LEN
 from simsteer.core.control import ControllerConfig, LateralController, LongitudinalController
+from simsteer.core.learners.livecalib import LiveCalib
 from simsteer.core.learners.liveparams import LiveParams
 from simsteer.core.model import DrivingModel
 from simsteer.core.postprocess import decode
@@ -306,6 +307,11 @@ class App:
         cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
         self.cfg = cfg
         self.lp = LiveParams(game="beamng")
+        # Online camera-pose calibration (openpilot's calibrationd):
+        # learns effective pitch/yaw/height while driving, commits into
+        # calib (warp + overlay) once CALIBRATED. Persists per-game, so
+        # like openpilot it fully calibrates once and refines forever.
+        self.lc = LiveCalib(game="beamng")
         self.lat = LateralController(cfg, live_params=self.lp)
         self.long = LongitudinalController(cfg)
 
@@ -475,11 +481,16 @@ class App:
         # Direct measurement outranks RLS: install the fit and mark it
         # mature (freeze-level sample count) so online updates can't
         # wander it the way the old AI-watching calibration could.
+        # Install as a strong PRIOR, not a frozen constant: RLS keeps
+        # learning while driving (openpilot's torqued behavior — auto-
+        # freeze is disabled in this fork of LiveParams by design).
+        # Tight covariance so a session's first noisy samples can't
+        # yank the measured seed; the fit stays adaptive to damage,
+        # vehicle changes, etc.
         self.lp.x[:] = [a, 0.0, 0.0]
-        # safely past FREEZE_AFTER_SAMPLES (2000): at exactly 2000 one
-        # more RLS update slipped in and nudged a by 3%
-        self.lp.samples = 5000
-        self.lp.session_samples = 5000
+        self.lp.P = np.diag((0.25, 1e-6, 1e-4))
+        self.lp.samples = 1000
+        self.lp.session_samples = 1000
         self.lp.save()
 
         # Actuation lag by cross-correlation over the pulse train: the
@@ -652,7 +663,7 @@ class App:
                 self.world.apply(steer, thr, brk)
             commanded = steer
 
-        # Feed the learner: our command while we drive, the game's own
+        # Feed the learners: our command while we drive, the game's own
         # steering input while a human / BeamNG AI drives (passive
         # fit). Skipped during CAL — the system-ID computes its own
         # fit and installs it wholesale.
@@ -661,6 +672,17 @@ class App:
                       (commanded if commanded is not None
                        else tel["steering_input"]))
         self.lp.update(game_steer, v_ego, wheel, commanded_axis=game_steer)
+
+        # Camera-pose learner runs on every frame (its own gates handle
+        # speed/turning/uncertainty); commits into self.calib — which
+        # the warp and overlay read — once CALIBRATED.
+        if not self.cal_active:
+            self.lc.update(self.calib, decoded.pose, decoded.road_transform,
+                           yaw_rate, v_ego,
+                           pose_std=decoded.pose_std,
+                           road_transform_std=decoded.road_transform_std,
+                           wide_from_device_euler=decoded.wide_from_device_euler,
+                           game_steer=tel["steering_input"])
 
         self.last_steer, self.last_thr, self.last_brk = steer, thr, brk
 
@@ -694,7 +716,10 @@ class App:
               f"n={max(lp.samples, lp.session_samples)} [{trust}]"
               f"  off~{self._off_ema:+.2f}m"
               f"  trim {self.lat.axis_trim_state:+.3f}"
-              f"({self.lat.last_trim_frozen_reason or 'run'})")
+              f"({self.lat.last_trim_frozen_reason or 'run'})"
+              f"  cam[{self.lc.blocks}b"
+              f"{'*' if self.lc.writes_enabled else ''}]"
+              f"  aFB {self.long.last_a_fb:+.2f}")
         if self.desire_idx is not None:
             l3 += f"   >>> {DESIRE_NAME[self.desire_idx]} " \
                   f"({self.desire_until - time.monotonic():.1f}s)"

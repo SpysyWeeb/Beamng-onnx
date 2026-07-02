@@ -233,6 +233,14 @@ class ControllerConfig:
     # through the stop line at zero pedal otherwise.
     stop_hold_speed: float = 0.6
     stop_hold_brake: float = 0.3
+    # Closed loop on MEASURED acceleration — openpilot's actual long
+    # mechanism (controlsd runs a PID on a_target vs a_ego; it doesn't
+    # "learn" gains, feedback adapts to the vehicle in real time).
+    # Proportional on the LPF'd error between what we commanded ~0.3 s
+    # ago and what the car actually did (dv/dt). Corrects pedal-map
+    # residuals, load, slopes, damage — live. 0 disables.
+    accel_fb_p: float = 0.4
+    accel_fb_clip: float = 1.0
     # Hard clamp on the commanded acceleration — openpilot's ISO
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
@@ -562,6 +570,14 @@ class LongitudinalController:
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
         self._was_moving = False
+        # accel-feedback state: measured accel LPF, previous v, and a
+        # short history of commanded accel (setpoint ~0.3 s ago)
+        self._v_prev: float | None = None
+        self._a_meas = 0.0
+        self._a_err_lpf = 0.0
+        from collections import deque as _dq
+        self._a_hist = _dq(maxlen=6)
+        self.last_a_fb = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         # Corner-anticipation diagnostics for the HUD.
@@ -583,6 +599,14 @@ class LongitudinalController:
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
         self._was_moving = False
+        # accel-feedback state: measured accel LPF, previous v, and a
+        # short history of commanded accel (setpoint ~0.3 s ago)
+        self._v_prev: float | None = None
+        self._a_meas = 0.0
+        self._a_err_lpf = 0.0
+        from collections import deque as _dq
+        self._a_hist = _dq(maxlen=6)
+        self.last_a_fb = 0.0
         self.last_throttle = 0.0
         self.last_brake = 0.0
         self.last_v_safe_corner = float("inf")
@@ -740,6 +764,32 @@ class LongitudinalController:
             a_cmd = -cfg.max_decel_mps2
             self._a_cmd_smooth = a_cmd
 
+        # --- measured-accel feedback (openpilot's a_ego loop) ---
+        # Compare what we commanded ~0.3 s ago against what the car
+        # actually did (LPF'd dv/dt) and correct the pedal command.
+        # This is how openpilot adapts long to any car in real time —
+        # feedback, not learned constants. Setpoint (pre-correction)
+        # is what feeds the jerk limiter and history, so the loop
+        # can't chase its own corrections.
+        if self._v_prev is not None:
+            a_raw = (v_ego - self._v_prev) / dt
+            self._a_meas += 0.15 * (float(np.clip(a_raw, -12, 12))
+                                    - self._a_meas)
+        self._v_prev = v_ego
+        setpoint = a_cmd
+        self._a_hist.append(setpoint)
+        fb = 0.0
+        if (cfg.accel_fb_p > 0 and not aeb and v_ego > 2.0
+                and len(self._a_hist) == self._a_hist.maxlen):
+            err = float(self._a_hist[0]) - self._a_meas
+            self._a_err_lpf += 0.2 * (err - self._a_err_lpf)
+            fb = float(np.clip(cfg.accel_fb_p * self._a_err_lpf,
+                               -cfg.accel_fb_clip, cfg.accel_fb_clip))
+        else:
+            self._a_err_lpf *= 0.9
+        self.last_a_fb = fb
+        a_cmd = setpoint + fb
+
         # Pedal mapping. Calibrated affine inversion when CAL has
         # measured the car (note the coast gap: zero pedal already
         # gives -pedal_thr_off from drag, the lightest brake touch
@@ -792,7 +842,7 @@ class LongitudinalController:
 
         self.last_v_target = v_target
         self.last_a_target = a_target
-        self.last_a_cmd = a_cmd
+        self.last_a_cmd = setpoint   # pre-feedback, keeps jerk/history sane
         self.last_throttle = throttle
         self.last_brake = brake
         self.last_v_safe_corner = v_safe_corner
