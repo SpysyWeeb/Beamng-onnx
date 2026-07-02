@@ -136,9 +136,11 @@ class ModBridge(threading.Thread):
     def status_line(self) -> str:
         app = self.app
         v = app.tel.snapshot()["v_ego"] * 2.237
+        cap = app.cfg.max_speed_mps * 2.237
         s = ("ENGAGED" if app.engaged else
              ("CAL" if app.cal_active else "manual"))
-        line = f"{s} | {v:.0f} mph | long {'on' if app.long_enabled else 'off'}"
+        line = (f"{s} | {v:.0f} mph | cap {cap:.0f} | "
+                f"long {'on' if app.long_enabled else 'off'}")
         if app.desire_idx is not None:
             line += f" | {DESIRE_NAME[app.desire_idx]}"
         return line
