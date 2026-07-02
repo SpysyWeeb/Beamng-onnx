@@ -1,0 +1,22 @@
+{
+  "domElement": "<onnx-panel></onnx-panel>",
+  "name": "ONNX Panel",
+  "types": [
+    "ui.apps.categories.vehicle_control"
+  ],
+  "css": {
+    "right": "10px",
+    "top": "280px",
+    "width": "230px",
+    "height": "300px",
+    "min-width": "180px",
+    "min-height": "230px"
+  },
+  "description": "Control the external Beamng-onnx driver: engage, lane changes, turns, longitudinal, calibration",
+  "author": "SpysyWeeb",
+  "version": "1.0",
+  "directive": "onnxPanel",
+  "category": "Gameplay",
+  "isAuxiliary": false,
+  "interactive": "required"
+}
