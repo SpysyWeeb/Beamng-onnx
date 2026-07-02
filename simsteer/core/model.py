@@ -33,11 +33,18 @@ VISION_PATH = model_path("driving_vision.onnx")
 POLICY_PATH = model_path("driving_policy.onnx")
 
 
-def _make_session(path: Path, providers: list[str]) -> ort.InferenceSession:
+def _make_session(path: Path, providers: list[str],
+                  intra_op_threads: int | None = None) -> ort.InferenceSession:
     if not path.exists():
         raise FileNotFoundError(
             f"{path} missing — run `python tools/fetch_model.py`")
-    return ort.InferenceSession(str(path), providers=providers)
+    so = ort.SessionOptions()
+    if intra_op_threads is not None:
+        # ORT's CPU EP defaults to one thread per core, which saturates the
+        # whole machine at 20 Hz even though a few threads already beat the
+        # 50 ms frame budget. Cap it when running alongside a game.
+        so.intra_op_num_threads = intra_op_threads
+    return ort.InferenceSession(str(path), sess_options=so, providers=providers)
 
 
 class DrivingModel:
@@ -47,7 +54,8 @@ class DrivingModel:
     DESIRE_BUF_LEN = FRAME_SKIP * DESIRE_BUFFER_LEN            # 100
 
     def __init__(self, providers: list[str] | None = None,
-                 policy_providers: list[str] | None = None) -> None:
+                 policy_providers: list[str] | None = None,
+                 intra_op_threads: int | None = None) -> None:
         # DirectML accelerates the vision encoder (the big one). The policy
         # head currently fails to initialize on DML (opset-20 op the DML EP
         # rejects with E_INVALIDARG), and at ~3 ms on CPU it isn't the
@@ -56,8 +64,8 @@ class DrivingModel:
             providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
         if policy_providers is None:
             policy_providers = ["CPUExecutionProvider"]
-        self.vision = _make_session(VISION_PATH, providers)
-        self.policy = _make_session(POLICY_PATH, policy_providers)
+        self.vision = _make_session(VISION_PATH, providers, intra_op_threads)
+        self.policy = _make_session(POLICY_PATH, policy_providers, intra_op_threads)
         self.active_provider = self.vision.get_providers()[0]
         self.policy_provider = self.policy.get_providers()[0]
 

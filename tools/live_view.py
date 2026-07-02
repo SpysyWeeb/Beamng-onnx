@@ -54,7 +54,8 @@ def main() -> int:
 
     print("[view] loading model (CPU) ...", flush=True)
     model = DrivingModel(providers=["CPUExecutionProvider"],
-                         policy_providers=["CPUExecutionProvider"])
+                         policy_providers=["CPUExecutionProvider"],
+                         intra_op_threads=3)
     queue = FrameQueue()
 
     world = BeamNGOnnxWorld()

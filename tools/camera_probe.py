@@ -74,7 +74,8 @@ def main() -> int:
         print(f"    {k}: {np.round(v, 2)}")
 
     model = DrivingModel(providers=["CPUExecutionProvider"],
-                         policy_providers=["CPUExecutionProvider"])
+                         policy_providers=["CPUExecutionProvider"],
+                         intra_op_threads=3)
 
     vfov = fov_v_deg(CAM_FOV_H_DEG, CAM_W, CAM_H)
     for name, pos in CANDIDATES.items():
