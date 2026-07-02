@@ -40,6 +40,13 @@ CAM_POS = (0.0, -0.90, 1.30)
 CAM_DIR = (0.0, -1.0, 0.0)
 CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 
+# SimSteer's Calibration defaults lateral_sign=-1 (right for ETS2/AC/Forza's
+# screen-capture + gamepad conventions). Our beamngpy render is NOT mirrored
+# (verified: warped model input matches raw orientation) and the model's
+# native y is right-positive, so the overlay projection needs +1 — with -1
+# the drawn plan/lanes mirror and "curve the wrong way".
+CAM_LATERAL_SIGN = 1.0
+
 CAM_W, CAM_H = 1664, 832
 CAM_FOV_H_DEG = 100.0
 
