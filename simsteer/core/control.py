@@ -813,9 +813,20 @@ class LongitudinalController:
         self._v_prev = v_ego
         setpoint = a_cmd
         self._a_hist.append(setpoint)
-        gate = (not aeb and v_ego > 2.0 and self._stop_brake == 0.0
+        # Approaching a planned stop: the integral trim was learned at
+        # CRUISE throttle — applied here it becomes creep gas exactly
+        # when the plan wants zero (field: 'still creeps when the
+        # model wants to stop'; the chart showed measured accel riding
+        # above target through the whole slowdown). openpilot resets
+        # its long PID integrator in the stopping state — same idea:
+        # zero the feedback and rapidly forget the integral.
+        approaching_stop = v_target < 1.0 and v_ego < 4.0
+        gate = (not aeb and not approaching_stop and v_ego > 2.0
+                and self._stop_brake == 0.0
                 and cfg.accel_cmd_min_mps2 < setpoint < cfg.accel_cmd_max_mps2
                 and len(self._a_hist) == self._a_hist.maxlen)
+        if approaching_stop:
+            self._a_fb_i *= math.exp(-dt / 0.5)
         if gate:
             err = float(self._a_hist[0]) - self._a_meas
             self._a_err_lpf += 0.15 * (err - self._a_err_lpf)
@@ -833,9 +844,12 @@ class LongitudinalController:
                     self._a_fb_i, -cfg.accel_fb_clip, cfg.accel_fb_clip))
         else:
             self._a_err_lpf *= 0.9
-        fb = float(np.clip(
-            cfg.accel_fb_p * self._a_err_lpf + self._a_fb_i,
-            -cfg.accel_fb_clip, cfg.accel_fb_clip))
+        if approaching_stop:
+            fb = 0.0
+        else:
+            fb = float(np.clip(
+                cfg.accel_fb_p * self._a_err_lpf + self._a_fb_i,
+                -cfg.accel_fb_clip, cfg.accel_fb_clip))
         self.last_a_fb = fb
         a_cmd = setpoint + fb
 
