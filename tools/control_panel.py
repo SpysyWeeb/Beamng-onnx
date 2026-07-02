@@ -278,7 +278,8 @@ class App:
         except Exception as exc:
             print(f"[panel] in-game panel load skipped: {exc}", flush=True)
 
-        cfg = ControllerConfig()
+        # per-game config: CAL persists the measured lookahead here
+        cfg = ControllerConfig.load(game="beamng")
         cfg.wheelbase_m = WHEELBASE_M
         cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
         self.cfg = cfg
@@ -429,6 +430,7 @@ class App:
         self._cal_phase = "settle"
         self._cal_t0 = time.monotonic()
         self._cal_samples: list[tuple[float, float]] = []
+        self._cal_series: list[tuple[float, float]] = []   # (axis, wheel)/frame
         self.set_banner("CAL: scripted system-ID at spawn — hands off", 4.0)
 
     def _cal_finish(self) -> None:
@@ -453,7 +455,33 @@ class App:
         self.lp.samples = 5000
         self.lp.session_samples = 5000
         self.lp.save()
-        self.set_banner(f"CAL done: a={a:+.2f} from {n} samples (frozen)", 5.0)
+
+        # Actuation lag by cross-correlation over the pulse train: the
+        # frame shift where command best predicts wheel response. This
+        # measures the game path only; the engaged loop adds our own
+        # EPS-emulation filter, so lookahead = lag + steer_smooth_s
+        # (the direct openpilot steerActuatorDelay analog).
+        lag_s = 0.0
+        if len(self._cal_series) > 40:
+            ax = np.array([p[0] for p in self._cal_series])
+            wh = np.array([p[1] for p in self._cal_series])
+            best_c = -1e9
+            for k in range(0, 13):                      # 0..0.6 s @ 20 Hz
+                a_s = ax[:len(ax) - k] if k else ax
+                w_s = wh[k:]
+                sd = float(np.std(a_s) * np.std(w_s))
+                if sd < 1e-9:
+                    continue
+                c = float(np.mean((a_s - a_s.mean()) * (w_s - w_s.mean())) / sd)
+                if c > best_c:
+                    best_c, lag_s = c, k * 0.05
+            self.cfg.lookahead_s = float(np.clip(
+                lag_s + self.cfg.steer_smooth_s, 0.10, 0.60))
+            self.cfg.save(game="beamng")
+
+        self.set_banner(f"CAL done: a={a:+.2f} ({n} samples, frozen)  "
+                        f"lag={lag_s*1000:.0f}ms -> lookahead "
+                        f"{self.cfg.lookahead_s:.2f}s", 6.0)
 
     # ---- per-frame control ----
 
@@ -492,9 +520,13 @@ class App:
                     thr_c = 0.25 if v_ego < CAL_V else 0.05
                     self.world.apply(axis, thr_c, 0.0)
                     in_pulse = phase_t - i * CAL_PULSE_S
-                    if (in_pulse > CAL_PULSE_SETTLE_S and wheel is not None
-                            and v_ego > 4.0):
-                        self._cal_samples.append((axis, wheel))
+                    if wheel is not None and v_ego > 4.0:
+                        # full series (transients included) for the lag
+                        # cross-correlation
+                        self._cal_series.append((axis, wheel))
+                        if in_pulse > CAL_PULSE_SETTLE_S:
+                            # settled samples only for the gain fit
+                            self._cal_samples.append((axis, wheel))
         elif self.engaged:
             lane_change_cmd = desire_active and self.desire_idx in (3, 4)
             steer = self.lat.compute(decoded, v_ego,

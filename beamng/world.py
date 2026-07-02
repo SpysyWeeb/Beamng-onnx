@@ -191,14 +191,24 @@ class BeamNGOnnxWorld:
                 "controller.mainController.shiftToGearIndex(2) end")
 
     def set_signal(self, direction: str | None) -> None:
-        """Turn signals: 'left', 'right', or None for off. Drives the
-        blinker inputs directly in vehicle lua."""
-        left = 1 if direction == "left" else 0
-        right = 1 if direction == "right" else 0
+        """Turn signals: 'left', 'right', or None for off.
+
+        Writing electrics.values directly is a no-op (electrics
+        recomputes them every frame — measured); the working API is the
+        toggle functions, so read the latched left_signal/right_signal
+        state and toggle only on mismatch (idempotent)."""
+        want_l = "true" if direction == "left" else "false"
+        want_r = "true" if direction == "right" else "false"
+        lua = (
+            "local e = electrics.values "
+            "local l = (e.left_signal ~= nil and e.left_signal ~= 0 "
+            "and e.left_signal ~= false) "
+            "local r = (e.right_signal ~= nil and e.right_signal ~= 0 "
+            "and e.right_signal ~= false) "
+            f"if l ~= {want_l} then electrics.toggle_left_signal() end "
+            f"if r ~= {want_r} then electrics.toggle_right_signal() end")
         with self._ctl_lock:
-            self.vehicle.queue_lua_command(
-                f"electrics.values.signal_left_input = {left} "
-                f"electrics.values.signal_right_input = {right}")
+            self.vehicle.queue_lua_command(lua)
 
     def close(self) -> None:
         try:
