@@ -90,12 +90,25 @@ def test_no_vision_intervention():
 
 
 def test_curvature_clip():
+    # Default policy (2026-07-02, user decision): execution clamps OFF
+    # — only the rate limiter shapes steering.
+    cfg = ControllerConfig()
+    check("execution clamps disabled by default",
+          cfg.lat_accel_max_mps2 <= 0)
     plan = mk(4.0, lambda t: 1.2).plan     # hard-turning plan
+    plan[:, 11] = [1.2 * t for t in
+                   LongitudinalController(ControllerConfig())._T_IDXS]
+    k_free = desired_curvature_lag_adjusted(
+        plan, 4.0, 0.25, last_desired_curvature=0.30,
+        lat_jerk_max_mps3=10.0, lat_accel_max_mps2=None)
+    check("unclamped: curvature free past every old ceiling",
+          abs(k_free) > 0.30, f"k={k_free:.3f}")
+    # the clamp MECHANISM stays available when explicitly enabled:
     k_flat = desired_curvature_lag_adjusted(
         plan, 4.0, 0.25, last_desired_curvature=0.30,
         lat_jerk_max_mps3=10.0, lat_accel_max_mps2=3.5)
-    check("low-speed ceiling opens past ISO 0.2", 0.2 < abs(k_flat) <= 0.35,
-          f"k={k_flat:.3f}")
+    check("re-enabled clamp: low-speed ceiling 0.2-0.35 works",
+          0.2 < abs(k_flat) <= 0.35, f"k={k_flat:.3f}")
     v = 14.3
     plan = mk(v, lambda t: 0.4).plan
     t_idxs = LongitudinalController(ControllerConfig())._T_IDXS

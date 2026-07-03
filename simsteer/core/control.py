@@ -125,14 +125,17 @@ class ControllerConfig:
     # real EPS and passenger comfort, and 3.0 lateral g is exactly why
     # real openpilot balks at sharp city corners. The sim car grips
     # ~8+ m/s^2, so run "strong car" bounds: 2x wheel rate, 4.5 g cap.
-    # jerk 10 keeps the fast city wheel; the accel clamp comes back
-    # DOWN to 3.5 — at 4.5 the e2e plan's natural inside-line bias
-    # executed at full strength (geometry audit exonerated the inputs:
-    # vx ratio 0.995, yaw 1.028), cutting curves hard enough to cross
-    # lines and trigger unprompted lane commits. Real openpilot's 3.0
-    # is partly what suppresses curve-cutting.
+    # jerk 10 keeps the fast city wheel. lat_accel_max_mps2 <= 0
+    # DISABLES the execution clamps entirely (user decision
+    # 2026-07-02, best-effort principle): the model asks, the rate
+    # limiter shapes it, the sim tires are the physical limit, and
+    # corner ENTRY speed is governed separately by max_lat_accel_mps2
+    # + the turn governor. A positive value re-enables the openpilot
+    # clip_curvature behavior (lat-g window with road-roll
+    # compensation + the speed-aware 0.2-0.35 curvature ceiling) —
+    # real openpilot runs 3.0 on real EPS hardware.
     lat_jerk_max_mps3: float | None = 10.0
-    lat_accel_max_mps2: float = 3.5
+    lat_accel_max_mps2: float = 0.0
     # First-order smoothing on the final steering axis — emulated EPS
     # actuator dynamics. A real steering motor is a mechanical low-pass
     # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
@@ -350,13 +353,14 @@ class ControllerConfig:
     # brake hard for tight bends instead of waiting for the model's
     # (often conservative) planned velocity to drop. 2-3 m/s^2 feels
     # comfortable, 4-5 is firm, 6+ is aggressive. Set 0 to disable.
-    # MUST BE BELOW lat_accel_max_mps2 (the ISO clamp on commanded
-    # curvature), not merely matched: if long plans entry speed at
-    # exactly the lateral limit, any mid-corner tightening finds zero
-    # curvature reserve and the car runs wide (2026-07-02 canyon
-    # right-hander: k tracked perfectly at the 3.5 clamp, desired lat
-    # accel pinned at 3.5, off-center grew to 1.3 m, off the road).
-    # 3.0 planning vs 3.5 execution keeps ~15% curvature headroom.
+    # With the execution clamps disabled (lat_accel_max_mps2 = 0)
+    # this is the ONLY comfort/grip bound on curves: it shapes entry
+    # SPEED while steering itself is free to use whatever curvature
+    # the model asks for (rate-limited). History: when execution was
+    # clamped at 3.5, planning at the same number left zero mid-corner
+    # curvature reserve and the car ran wide off a canyon right-hander
+    # (2026-07-02) — planning below execution capability is what keeps
+    # headroom, and with unclamped steering the headroom is the tires.
     max_lat_accel_mps2: float = 3.0
     # How far ahead in the plan to scan for the tightest upcoming
     # corner. Should be ≥ long_anticipation_s. Default 6 s covers
@@ -524,7 +528,8 @@ class LateralController:
             last_desired_curvature=self.last_desired_k_raw,
             extra_buffer_s=cfg.curvature_anticipation_s,
             lat_jerk_max_mps3=cfg.lat_jerk_max_mps3,
-            lat_accel_max_mps2=cfg.lat_accel_max_mps2,
+            lat_accel_max_mps2=(cfg.lat_accel_max_mps2
+                                if cfg.lat_accel_max_mps2 > 0 else None),
             roll_glat=roll_glat,
         )
         self.last_desired_k_raw = k_raw
