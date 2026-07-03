@@ -82,9 +82,15 @@ def test_road_lost():
     lc = LongitudinalController(cfg)
     lc.road_lost = True
     lc.compute(mk(15.0), 15.0, mode="exp")
-    check("road_lost forces stop plan", lc.last_v_target == 0.0)
+    check("road_lost hold forces stop plan", lc.last_v_target == 0.0)
+    lc.road_lost_crawl = True
+    lc.compute(mk(0.0), 0.0, mode="exp")
+    check("road_lost crawl targets recovery-creep speed",
+          abs(lc.last_v_target - cfg.road_lost_crawl_mps) < 0.01,
+          f"vT={lc.last_v_target:.2f}")
     lc.reset()
-    check("reset clears road_lost", not lc.road_lost)
+    check("reset clears road_lost + crawl",
+          not lc.road_lost and not lc.road_lost_crawl)
 
 
 def test_curvature_clip():

@@ -384,6 +384,15 @@ class ControllerConfig:
     turn_speed_mps: float = 4.5
     turn_desire_prob: float = 0.3
     turn_yaw_span_rad: float = 0.5
+    # Lost-road recovery cycle: after `road_lost_hold_s` stopped-blind,
+    # creep at `road_lost_crawl_mps` for `road_lost_crawl_s` so the
+    # model gets the motion it needs to re-find the road, then re-hold
+    # and repeat — forever. Release the moment lane confidence
+    # recovers. Never park-and-give-up, never drive blind above a
+    # walking pace.
+    road_lost_hold_s: float = 6.0
+    road_lost_crawl_s: float = 5.0
+    road_lost_crawl_mps: float = 1.3
 
     # ----- ACC / lead following -----
     # The model emits 3 lead-vehicle hypotheses with (x, y, v, a) at
@@ -685,10 +694,14 @@ class LongitudinalController:
         # while moving. Forces the plan target to a smooth stop through
         # the normal jerk pipeline instead of letting a blind plan keep
         # driving, and blocks the creep probe from re-launching.
+        # `road_lost_crawl` (also app-driven) switches the hold into a
+        # slow recovery creep so vision gets the motion it needs.
         self.road_lost = False
+        self.road_lost_crawl = False
 
     def reset(self) -> None:
         self.road_lost = False
+        self.road_lost_crawl = False
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
@@ -794,8 +807,19 @@ class LongitudinalController:
                 a_target = min(a_target, 0.0)
 
         if self.road_lost:
-            v_target = 0.0
-            a_target = min(a_target, 0.0)
+            if self.road_lost_crawl:
+                # Recovery creep: the model needs motion to re-find the
+                # road (lane confidence is structurally depressed at
+                # standstill), so the lost-road guard alternates short
+                # crawls with re-holds instead of parking forever. Slow
+                # enough that blind steering is harmless (full lock at
+                # this speed is a ~3 m circle); lead/AEB constraints
+                # below still apply on top.
+                v_target = float(cfg.road_lost_crawl_mps)
+                a_target = min(a_target, 0.5)
+            else:
+                v_target = 0.0
+                a_target = min(a_target, 0.0)
 
         # ACC / lead following. The most-confident lead (index 0 in
         # the decoded.leads tensor — already sorted by prob in MHP

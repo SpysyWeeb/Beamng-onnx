@@ -451,6 +451,7 @@ class App:
         self.incident_note: str | None = None
         self._snap_req = False
         self._conf_low_t = 0.0
+        self._lost_phase_t = 0.0
         # Model-wants vs car-does instrumentation: ~15 s sparkline ring
         # buffers drawn on the viewer, plus a per-session CSV run log
         # (every control tick) for offline plots — tools/plot_run.py.
@@ -893,18 +894,36 @@ class App:
         # Lost-road guard: sustained lane-vision collapse while moving
         # means the car has left the pavement (2026-07-02 crash: 15 s
         # of probs ~0.01 while the model tried full-lock recovery
-        # U-turns). Trip after 2.5 s below 0.15 at speed; hold the
-        # stop until vision genuinely recovers.
+        # U-turns). Trip after 2.5 s below 0.15 at speed. Then CYCLE
+        # rather than park forever: hold a few seconds, creep slowly
+        # to give the model the motion it needs to re-find the road,
+        # re-hold, repeat — released the moment confidence recovers
+        # (lane probs are structurally depressed at standstill, so
+        # release realistically happens during a crawl phase).
         if self.engaged and self.conf_now < 0.15 and v_ego > 3.0:
             self._conf_low_t += dt
         elif self.conf_now > 0.40 or not self.engaged:
             self._conf_low_t = 0.0
             if self.long.road_lost:
                 self.long.road_lost = False
+                self.long.road_lost_crawl = False
                 self.set_banner("road found - resuming")
         if self._conf_low_t > 2.5 and not self.long.road_lost:
             self.long.road_lost = True
+            self.long.road_lost_crawl = False
+            self._lost_phase_t = now
             self.set_banner("ROAD LOST - stopping", 5.0)
+        if self.long.road_lost:
+            cfgl = self.long.cfg
+            if (not self.long.road_lost_crawl
+                    and now - self._lost_phase_t > cfgl.road_lost_hold_s):
+                self.long.road_lost_crawl = True
+                self._lost_phase_t = now
+                self.set_banner("ROAD LOST - creeping to look", 4.0)
+            elif (self.long.road_lost_crawl
+                    and now - self._lost_phase_t > cfgl.road_lost_crawl_s):
+                self.long.road_lost_crawl = False
+                self._lost_phase_t = now
 
         long_live = self.engaged and self.long_mode != "off" \
             and not self.cal_active
