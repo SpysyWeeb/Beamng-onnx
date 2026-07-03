@@ -388,9 +388,6 @@ class App:
         self.queue = FrameQueue()
         self.tel = Telemetry(self.world)
         self.tel.start()
-        self.sender = ControlSender(self.world,
-                                    steer_tau=self.cfg.steer_smooth_s)
-        self.sender.start()
 
         # In-game imgui panel (beamng_mod/): load the extension if the
         # mod is mounted; harmless no-op inside pcall when it isn't.
@@ -405,6 +402,11 @@ class App:
         cfg.wheelbase_m = WHEELBASE_M
         cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
         self.cfg = cfg
+        # after cfg: the 100 Hz steering executor takes its EPS time
+        # constant from it (constructing this earlier crashed on boot)
+        self.sender = ControlSender(self.world,
+                                    steer_tau=cfg.steer_smooth_s)
+        self.sender.start()
         self.lp = LiveParams(game="beamng")
         # Online camera-pose calibration (openpilot's calibrationd):
         # learns effective pitch/yaw/height while driving, commits into
