@@ -205,9 +205,18 @@ class ControlView:
             dpg.add_key_press_handler(
                 dpg.mvKey_B, callback=lambda *_: setattr(
                     self.app, "charts_on", not self.app.charts_on))
+            # NB: dpg 2.3.1 ships broken legacy key constants with tiny
+            # ASCII values (mvKey_Plus=61) that fall outside the valid
+            # keycode range (520-630) and match EVERY frame — binding
+            # one runs the handler continuously (this is what pinned the
+            # speed cap at 100). Use only in-range codes. The main-row
+            # '=' has no named constant here; its real code is 602
+            # (contiguous after Slash=600, Semicolon=601), sitting right
+            # next to the numpad '+' (mvKey_Add=626).
+            _EQUAL = getattr(dpg, "mvKey_Equal", 602)
             for kd in (dpg.mvKey_Minus, dpg.mvKey_Subtract):
                 dpg.add_key_press_handler(kd, callback=self._act("spd_dn"))
-            for ku in (dpg.mvKey_Plus, dpg.mvKey_Add):
+            for ku in (_EQUAL, dpg.mvKey_Add):
                 dpg.add_key_press_handler(ku, callback=self._act("spd_up"))
 
     def build(self):
