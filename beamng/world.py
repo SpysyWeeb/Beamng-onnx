@@ -48,7 +48,15 @@ CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 # the drawn plan/lanes mirror and "curve the wrong way".
 CAM_LATERAL_SIGN = 1.0
 
-CAM_W, CAM_H = 1664, 832
+# 2496x1248: 1.5x the original 1664x832. At 1664 the medmodel warp
+# sampled the source ~1:1 (no detail reserve); a real camera has ~4x
+# excess resolution that supersamples distant road and near-field
+# texture before the 512x256 downscale. BeamNG's road surface is
+# feature-poor up close, and sim lane confidence measurably decays at
+# low speed (0.95+ at 15 mph -> ~0.6 at 4 mph) — the "low-speed
+# vision trap" behind timid crawling. 1.5x is the affordable step
+# toward real-camera detail density; watch the loop-rate banner.
+CAM_W, CAM_H = 2496, 1248
 CAM_FOV_H_DEG = 100.0
 
 
