@@ -530,6 +530,15 @@ class App:
     def engage_allowed(self) -> tuple[bool, str]:
         if self.frame_idx < WARMUP_FRAMES:
             return False, f"model warming up ({self.frame_idx}/{WARMUP_FRAMES})"
+        if self.screen_mode:
+            # No telemetry and no CAL here by design: the rack starts
+            # from a seed and learns online WHILE engaged (the only
+            # time we command the wheel and can observe the response).
+            # Gating engage on a trusted rack would deadlock — you can
+            # never earn the samples. Best-effort start; the wheel-trim
+            # integrator bounds the seed error and the driver is the
+            # fallback, exactly like a fresh comma calibration drive.
+            return True, ""
         if not self.tel.ok:
             return False, "no telemetry"
         if not self.lp.trusted():
@@ -648,7 +657,11 @@ class App:
         self.lat.reset()
         self.long.reset()
         self.engaged = True
-        self.set_banner("ENGAGED" + (" (forced)" if forced else ""))
+        if self.screen_mode and not self.lp.trusted():
+            self.set_banner("ENGAGED - steering rack is learning; expect "
+                            "a wobble for the first ~1-2 min", 5.0)
+        else:
+            self.set_banner("ENGAGED" + (" (forced)" if forced else ""))
 
     def disengage(self, reason: str) -> None:
         self.engaged = False

@@ -264,6 +264,12 @@ _INITIAL_SEEDS: dict[tuple[str | None, str | None], tuple[float, float, float]] 
     # steering wheel (495 deg lock) ~ 0.13 rad road wheel -> a ~ 2.0,
     # b ~ 0 (measured, tools/m3_sign_check.py + step probe).
     ("beamng", None):    (2.0,  0.0,   0.0),
+    # No-tech.key screen mode drives a virtual G29 (simsteer/io/
+    # vwheel.py). The G29's ~900 deg soft-lock maps to the car's
+    # steering differently from FILTER_DIRECT, so this is a starting
+    # guess only — screen mode learns the rack online while engaged
+    # and the trim absorbs the residual.
+    ("screen", None):    (2.0,  0.0,   0.0),
 }
 
 
