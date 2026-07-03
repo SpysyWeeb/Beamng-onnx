@@ -254,20 +254,13 @@ class ControllerConfig:
     # gentle stop-phase commands (-0.5..-1.2) fall into a phantom coast
     # gap at low speed and the brake never fires at the end of stops.
     pedal_cal_v: float = 18.0
-    # Launch attenuation: the pedal tables are measured at 9-18 m/s
-    # (2nd/3rd gear); an automatic's 1st-gear torque-converter
-    # multiplication makes the same pedal deliver ~2x the accel off
-    # the line (run logs: 7 launches, a_meas peaked 3.8-4.15 vs a
-    # commanded ~1.9 at 0.19 throttle). Scale the throttle DEMAND by
-    # this factor at standstill, fading to 1.0 by launch_thr_full_v.
-    launch_thr_scale: float = 0.4
-    launch_thr_full_v: float = 8.0
-    # Full speed-dependent throttle demand correction ([[v, scale]]):
-    # the pedal table is one speed slice of a gear-dependent surface.
+    # Speed-dependent throttle demand correction ([[v, scale]]): the
+    # pedal table is one speed slice of a gear-dependent surface.
     # Fitted from 18k log samples (median measured/promised engine
-    # accel per speed bin): converter multiplies ~1.7x at 2-6 m/s,
-    # honest around 7-12 (the CAL region), under-delivers 25-35% in
-    # high gears. When set, replaces the two launch_thr_* knobs.
+    # accel per speed bin): the automatic's torque converter multiplies
+    # ~1.7x at 2-6 m/s (1st-gear launch), is honest around 7-12 (the
+    # CAL region), and under-delivers 25-35% in high gears. None = no
+    # scaling (scale 1.0 everywhere).
     thr_scale_map: list | None = None
     # Stopping state (openpilot LongControl 'stopping'): once the plan
     # wants a stop and speed drops below stop_hold_speed, RAMP the
@@ -1105,16 +1098,13 @@ class LongitudinalController:
             elif a_cmd + drag_eff >= 0.0:
                 # Gear-dependent engine delivery: scale the DEMAND fed
                 # to the table by the measured per-speed correction
-                # (thr_scale_map), or the simple launch fade when no
-                # curve has been fitted for this car.
+                # (thr_scale_map); 1.0 when no curve is fitted.
                 if cfg.thr_scale_map:
                     scale = float(np.interp(
                         v_ego, [p[0] for p in cfg.thr_scale_map],
                         [p[1] for p in cfg.thr_scale_map]))
                 else:
-                    scale = float(np.interp(
-                        v_ego, [0.0, max(cfg.launch_thr_full_v, 0.1)],
-                        [cfg.launch_thr_scale, 1.0]))
+                    scale = 1.0
                 throttle = float(np.clip(
                     np.interp((a_cmd + drag_eff) * scale, tx, tp),
                     0.0, 1.0))
