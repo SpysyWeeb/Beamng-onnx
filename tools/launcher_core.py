@@ -179,8 +179,16 @@ class LauncherCore:
     def _spawn_panel(self, args: list[str]) -> None:
         env = dict(os.environ)
         env.setdefault("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
+        # capture the control panel's stdout/stderr — it's spawned
+        # detached, so without this any crash is invisible (window
+        # pops up and vanishes). Read debug_out/control_panel_last.log.
+        os.makedirs(os.path.join(ROOT, "debug_out"), exist_ok=True)
+        logf = open(os.path.join(ROOT, "debug_out",
+                                 "control_panel_last.log"), "w")
         subprocess.Popen(self._panel_cmd(args), cwd=ROOT, env=env,
-                         start_new_session=True)
+                         start_new_session=True, stdout=logf,
+                         stderr=subprocess.STDOUT)
+        self.log("control panel log -> debug_out/control_panel_last.log")
         self.launched = True
         self.done_at = time.monotonic()
 

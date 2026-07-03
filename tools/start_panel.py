@@ -202,8 +202,9 @@ class StartView:
         self.build()
         while dpg.is_dearpygui_running():
             dpg.set_value("status", "\n".join(self.c.status[-10:]))
-            if self.c.busy:
-                dpg.configure_item(dpg.last_container(), enabled=False)
+            # only close AFTER the control panel has actually been
+            # spawned (launched is set at the very end of the flow) —
+            # never during the game-boot wait.
             if self.c.launched and time.monotonic() - self.c.done_at > 3.0:
                 break
             dpg.render_dearpygui_frame()
