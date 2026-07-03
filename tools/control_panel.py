@@ -460,6 +460,7 @@ class App:
         self._snap_req = False
         self._conf_low_t = 0.0
         self._conf_warned = False
+        self._lc_committed = False
         # Model-wants vs car-does instrumentation: ~15 s sparkline ring
         # buffers drawn on the viewer, plus a per-session CSV run log
         # (every control tick) for offline plots — tools/plot_run.py.
@@ -783,6 +784,27 @@ class App:
 
         desire_active = (self.desire_idx is not None
                          and now < self.desire_until)
+        # DesireHelper-style completion cut: one lane change per
+        # command. The model's desire pulse lives ~5 s in its input
+        # buffer while the maneuver takes ~3.5 s; holding the desire
+        # past completion let the leftover tail wind up a SECOND
+        # change (logged: clean 1-lane change at t+3.7 s, second
+        # right-commit at t+5.3 s -> "cuts across several lanes").
+        # openpilot's DesireHelper drops the desire the moment the
+        # model's own lane-change belief collapses after being high;
+        # mirror that here instead of running the timer out.
+        if desire_active and self.desire_idx in (3, 4):
+            lc_p = (float(decoded.desire_state[3])
+                    + float(decoded.desire_state[4]))
+            if lc_p > 0.3:
+                self._lc_committed = True
+            elif self._lc_committed and lc_p < 0.1:
+                self.desire_until = 0.0
+                desire_active = False
+                self._lc_committed = False
+                self.set_banner("lane change complete")
+        else:
+            self._lc_committed = False
         if not desire_active:
             self.desire_idx = None
         self._update_signal()
