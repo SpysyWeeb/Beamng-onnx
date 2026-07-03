@@ -42,37 +42,47 @@ def _wm_name(w) -> str:
         return ""
 
 
-def _find_window(dsp, hint: str):
-    """Deepest viewable window whose title or WM_CLASS contains `hint`
-    (case-insensitive) and is at least video-sized. Preferring the
-    deepest match skips frame/decoration wrappers in windowed mode."""
-    hint = hint.lower()
-    best, best_depth = None, -1
+# Our own UI windows (start panel, control panel) all carry "onnx" in
+# their title/class. The default hint "beamng" matches them too, so we
+# must never capture ourselves — that produces the infinite-mirror
+# feedback (game window recreates on focus change -> stale handle ->
+# re-search -> our own window is the only other "beamng" match).
+_SELF_MARK = "onnx"
 
-    def visit(w, depth):
-        nonlocal best, best_depth
+
+def _find_window(dsp, hint: str):
+    """Largest viewable window whose title or WM_CLASS contains `hint`
+    (case-insensitive), is at least video-sized, and is NOT one of our
+    own UI windows. Largest-area wins: the game's render surface is the
+    big one; decoration wrappers and stray tiny windows lose."""
+    hint = hint.lower()
+    best, best_area = None, -1
+
+    def visit(w):
+        nonlocal best, best_area
         try:
             children = w.query_tree().children
         except Exception:
             children = []
         for c in children:
-            visit(c, depth + 1)
+            visit(c)
         try:
             if w.get_attributes().map_state != X.IsViewable:
                 return
             cls = w.get_wm_class() or ("", "")
             hay = f"{_wm_name(w)} {cls[0]} {cls[1]}".lower()
-            if hint not in hay:
+            if hint not in hay or _SELF_MARK in hay:
                 return
             geo = w.get_geometry()
             if geo.width < 640 or geo.height < 360:
                 return
-            if depth >= best_depth:
-                best, best_depth = w, depth
+            area = geo.width * geo.height
+            if area > best_area:
+                best, best_area = w, area
         except Exception:
             pass
 
-    visit(dsp.screen().root, 0)
+    visit(dsp.screen().root)
     return best
 
 
