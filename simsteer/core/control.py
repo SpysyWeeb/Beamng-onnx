@@ -520,13 +520,11 @@ class LateralController:
     def compute(self, decoded: Decoded, v_ego: float,
                 actual_wheel_angle: float | None = None,
                 lane_change_command_active: bool = False,
-                dt: float = 0.05, roll_glat: float = 0.0) -> float:
+                dt: float = 0.05) -> float:
         """Plan -> gamepad axis. `actual_wheel_angle` (rad) feeds the
         closed-loop trim integrator; pass None to disable feedback
         for this frame. `dt` (s) is used by the integrator + leak —
-        defaults to 0.05 s (20 Hz) for callers that don't measure it.
-        `roll_glat` (m/s^2) is the road-bank gravity term for the
-        curvature clip's roll compensation."""
+        defaults to 0.05 s (20 Hz) for callers that don't measure it."""
         cfg = self.cfg
         if v_ego < cfg.min_speed:
             self.last_curvature = 0.0
@@ -563,7 +561,6 @@ class LateralController:
             lat_jerk_max_mps3=cfg.lat_jerk_max_mps3,
             lat_accel_max_mps2=(cfg.lat_accel_max_mps2
                                 if cfg.lat_accel_max_mps2 > 0 else None),
-            roll_glat=roll_glat,
             override_desired_k=override_k,
         )
         self.last_desired_k_raw = k_raw

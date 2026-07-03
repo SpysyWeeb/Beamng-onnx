@@ -942,9 +942,7 @@ class App:
             steer = self.lat.compute(decoded, v_ego,
                                      actual_wheel_angle=wheel,
                                      lane_change_command_active=lane_change_cmd,
-                                     dt=dt,
-                                     roll_glat=self.tel.snapshot().get(
-                                         "roll_glat", 0.0))
+                                     dt=dt)
             if self.screen_mode and wheel is not None:
                 # screen mode has no CAL and no telemetry: learn the
                 # axis->wheel rack online from our own command vs the

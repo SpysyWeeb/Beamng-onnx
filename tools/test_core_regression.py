@@ -109,21 +109,6 @@ def test_curvature_clip():
         lat_jerk_max_mps3=10.0, lat_accel_max_mps2=3.5)
     check("re-enabled clamp: low-speed ceiling 0.2-0.35 works",
           0.2 < abs(k_flat) <= 0.35, f"k={k_flat:.3f}")
-    v = 14.3
-    plan = mk(v, lambda t: 0.4).plan
-    t_idxs = LongitudinalController(ControllerConfig())._T_IDXS
-    plan[:, 11] = [0.5 * t for t in t_idxs]   # heading ramp: demand > clamp
-    args = dict(last_desired_curvature=0.016, lat_jerk_max_mps3=10.0,
-                lat_accel_max_mps2=3.5)
-    k0 = desired_curvature_lag_adjusted(plan, v, 0.25, **args)
-    k_bank = desired_curvature_lag_adjusted(plan, v, 0.25, roll_glat=-0.98,
-                                            **args)
-    check("right-hand bank allows more right curvature", k_bank > k0,
-          f"flat={k0:.4f} banked={k_bank:.4f}")
-    k_adverse = desired_curvature_lag_adjusted(plan, v, 0.25, roll_glat=0.98,
-                                               **args)
-    check("adverse bank allows less right curvature", k_adverse < k0,
-          f"adverse={k_adverse:.4f}")
 
 
 def test_min_stable_delay():

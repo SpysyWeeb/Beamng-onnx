@@ -187,7 +187,6 @@ def desired_curvature_lag_adjusted(
     extra_buffer_s: float | None = None,
     lat_jerk_max_mps3: float | None = None,
     lat_accel_max_mps2: float | None = None,
-    roll_glat: float = 0.0,
     override_desired_k: float | None = None,
 ) -> float:
     """Lag-adjusted desired curvature, ported from openpilot's
@@ -229,8 +228,7 @@ def desired_curvature_lag_adjusted(
         # skipped — but the rate limiter and clamps below still apply.
         desired_k = float(override_desired_k)
         return _shape_desired_k(desired_k, v, last_desired_curvature,
-                                lat_jerk_max_mps3, lat_accel_max_mps2,
-                                roll_glat)
+                                lat_jerk_max_mps3, lat_accel_max_mps2)
 
     yaw_col = plan[:, PlanField.EULER.start + 2]              # column 11
     yaw_rate_col = plan[:, PlanField.ORIENTATION_RATE.start + 2]  # column 14
@@ -257,8 +255,7 @@ def desired_curvature_lag_adjusted(
     #
     # Two forms:
     return _shape_desired_k(desired_k, v, last_desired_curvature,
-                            lat_jerk_max_mps3, lat_accel_max_mps2,
-                            roll_glat)
+                            lat_jerk_max_mps3, lat_accel_max_mps2)
 
 
 
@@ -266,12 +263,11 @@ def desired_curvature_lag_adjusted(
 def _shape_desired_k(desired_k: float, v: float,
                      last_desired_curvature: float,
                      lat_jerk_max_mps3: float | None,
-                     lat_accel_max_mps2: float | None,
-                     roll_glat: float) -> float:
+                     lat_accel_max_mps2: float | None) -> float:
     """Shared shaping for a desired curvature, whatever produced it
     (plan psi math or a direct model action head): the ISO-jerk
     rate limiter with unwind asymmetry, then the optional lat-accel
-    window (with roll compensation) and speed-aware ceiling."""
+    window and speed-aware ceiling."""
     #  - ISO lateral-jerk (current openpilot, drive_helpers.clip_curvature):
     #    max_rate = MAX_LATERAL_JERK / v^2. Speed-aware the right way
     #    around — a slow car may swing the wheel fast (city corners,
@@ -312,15 +308,9 @@ def _shape_desired_k(desired_k: float, v: float,
     # tapering back to the ISO 0.2 wherever v^2*0.35 would exceed the
     # comfort bound — the lat-accel clamp stays the binding limit.
     if lat_accel_max_mps2 is not None:
-        # Roll compensation, as in master clip_curvature: on a banked
-        # road gravity supplies part of the centripetal force, so the
-        # TIRE lateral budget shifts by the bank term. roll_glat =
-        # g * z-of-right-axis (negative = right side dips = bank
-        # assists right/positive-k turns in our sign convention).
         m = float(lat_accel_max_mps2)
         safe_desired_k = float(np.clip(
-            safe_desired_k, (-m - roll_glat) / (v * v),
-            (m - roll_glat) / (v * v)))
+            safe_desired_k, -m / (v * v), m / (v * v)))
         k_cap = float(np.clip(m / (v * v), 0.2, 0.35))
         safe_desired_k = float(np.clip(safe_desired_k, -k_cap, k_cap))
     return safe_desired_k
