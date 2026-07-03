@@ -136,7 +136,7 @@ class Telemetry(threading.Thread):
         self.data = {"v_ego": 0.0, "steering_deg": 0.0,
                      "steering_input": 0.0, "heading_rad": 0.0,
                      "throttle_input": 0.0, "brake_input": 0.0,
-                     "pos": (0.0, 0.0, 0.0)}
+                     "pos": (0.0, 0.0, 0.0), "roll_glat": 0.0}
         self.ok = False
         self._stop = threading.Event()
 
@@ -842,7 +842,9 @@ class App:
             steer = self.lat.compute(decoded, v_ego,
                                      actual_wheel_angle=wheel,
                                      lane_change_command_active=lane_change_cmd,
-                                     dt=dt)
+                                     dt=dt,
+                                     roll_glat=self.tel.snapshot().get(
+                                         "roll_glat", 0.0))
             if self.long_mode == "off":
                 # steering only — no throttle/brake API calls, so the
                 # player's own pedal inputs pass through untouched
@@ -924,7 +926,7 @@ class App:
                 "t,eng,mode,cal,v_ego,v_target,a_target,a_cmd,a_fb,"
                 "a_meas,thr,brk,steer,k_des,k_meas,lane_off,lead_x,"
                 "lead_p,pitch_applied,pitch_learned,"
-                "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim\n")
+                "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim,roll\n")
             print(f"[panel] run log: {self.log_path}", flush=True)
         lead_p = (float(decoded.lead_prob[0])
                   if decoded.lead_prob.size else 0.0)
@@ -945,7 +947,8 @@ class App:
             f"{int(np.argmax(decoded.desire_state))},"
             f"{float(np.max(decoded.desire_state)):.2f},"
             f"{float(decoded.plan[-1, 3]):.2f},"
-            f"{self.lat.axis_trim_state:+.4f}\n")
+            f"{self.lat.axis_trim_state:+.4f},"
+            f"{tel.get('roll_glat', 0.0):+.2f}\n")
 
         # flight recorder trigger: engaged, moving, and the plan's
         # velocity target collapsed well below current speed with no
@@ -979,7 +982,7 @@ class App:
         l1 = (f"{'ENGAGED' if self.engaged else 'manual '}  "
               f"{v_ego*2.237:4.0f} mph (cap {self.cfg.max_speed_mps*2.237:.0f})  "
               f"steer {self.last_steer:+.2f}  thr {self.last_thr:.2f}  "
-              f"brk {self.last_brk:.2f}  {self.hz:4.1f} Hz")
+              f"brk {self.last_brk:.2f}  work {self.hz:3.0f}Hz")
         l2 = (f"lanes {probs}  lead {lead_p:.2f}"
               + (f" @{self.long.last_lead_x:.0f}m" if self.long.last_lead_x < 500 else "")
               + f"  vT {min(self.long.last_v_target, 99)*2.237:3.0f}"

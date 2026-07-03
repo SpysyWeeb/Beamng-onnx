@@ -481,8 +481,6 @@ class LateralController:
         # Last-frame trim freeze reason — for HUD diagnostics. Empty
         # string when the integrator was running.
         self.last_trim_frozen_reason = ""
-        # Emulated-EPS smoothing state (see cfg.steer_smooth_s).
-        self._axis_smooth = 0.0
 
     def reset(self) -> None:
         """Drop derived state. Call on disengage/re-engage transitions
@@ -497,16 +495,17 @@ class LateralController:
         self.axis_trim_state = 0.0
         self.lpf_wheel_error = 0.0
         self.last_trim_frozen_reason = ""
-        self._axis_smooth = 0.0
 
     def compute(self, decoded: Decoded, v_ego: float,
                 actual_wheel_angle: float | None = None,
                 lane_change_command_active: bool = False,
-                dt: float = 0.05) -> float:
+                dt: float = 0.05, roll_glat: float = 0.0) -> float:
         """Plan -> gamepad axis. `actual_wheel_angle` (rad) feeds the
         closed-loop trim integrator; pass None to disable feedback
         for this frame. `dt` (s) is used by the integrator + leak —
-        defaults to 0.05 s (20 Hz) for callers that don't measure it."""
+        defaults to 0.05 s (20 Hz) for callers that don't measure it.
+        `roll_glat` (m/s^2) is the road-bank gravity term for the
+        curvature clip's roll compensation."""
         cfg = self.cfg
         if v_ego < cfg.min_speed:
             self.last_curvature = 0.0
@@ -515,7 +514,6 @@ class LateralController:
             self.last_axis_target = 0.0
             self.last_in_lane_change = False
             self.last_authority = 0.0
-            self._axis_smooth = 0.0
             return 0.0
 
         # Plan-following via openpilot's `get_lag_adjusted_curvature`:
@@ -535,6 +533,7 @@ class LateralController:
             extra_buffer_s=cfg.curvature_anticipation_s,
             lat_jerk_max_mps3=cfg.lat_jerk_max_mps3,
             lat_accel_max_mps2=cfg.lat_accel_max_mps2,
+            roll_glat=roll_glat,
         )
         self.last_desired_k_raw = k_raw
         k_total = k_raw

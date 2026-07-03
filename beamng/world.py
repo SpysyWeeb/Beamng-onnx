@@ -160,7 +160,18 @@ class BeamNGOnnxWorld:
         el = self.vehicle.sensors["electrics"]
         st = self.vehicle.state or {}
         d = st.get("dir", (0.0, -1.0, 0.0))
+        u = st.get("up", (0.0, 0.0, 1.0))
+        # Road-bank gravity term: g * z of the car's right axis
+        # (right = dir x up). Negative when the right side dips, i.e.
+        # the bank assists right turns. Feeds the curvature clip's
+        # roll compensation (openpilot's clip_curvature does the same
+        # with liveParameters.roll).
+        rx = d[1] * u[2] - d[2] * u[1]
+        ry = d[2] * u[0] - d[0] * u[2]
+        rz = d[0] * u[1] - d[1] * u[0]
+        n = math.sqrt(rx * rx + ry * ry + rz * rz) or 1.0
         return {
+            "roll_glat": 9.81 * rz / n,
             "v_ego": float(el.get("wheelspeed", 0.0)),
             "steering_deg": float(el.get("steering", 0.0)),
             "steering_input": float(el.get("steering_input", 0.0)),

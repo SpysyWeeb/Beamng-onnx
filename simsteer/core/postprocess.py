@@ -169,6 +169,11 @@ _MAX_CURV_RATE_HI = 0.003441203371932992
 # leaving no margin for the rest of the pipeline. Putting it back.
 EXTRA_LAG_BUFFER_S = 0.2
 
+# Master drive_helpers MIN_STABLE_DELAY: below this action horizon the
+# psi/(v*t) form is numerically unstable, so the heading target is read
+# at the stable point and scaled down linearly.
+_MIN_STABLE_DELAY = 0.3
+
 
 def desired_curvature_lag_adjusted(
     plan: np.ndarray, v_ego: float, steer_actuator_delay: float,
@@ -176,6 +181,7 @@ def desired_curvature_lag_adjusted(
     extra_buffer_s: float | None = None,
     lat_jerk_max_mps3: float | None = None,
     lat_accel_max_mps2: float | None = None,
+    roll_glat: float = 0.0,
 ) -> float:
     """Lag-adjusted desired curvature, ported from openpilot's
     `selfdrive/controls/lib/drive_helpers.py:get_lag_adjusted_curvature`.
@@ -212,17 +218,20 @@ def desired_curvature_lag_adjusted(
 
     yaw_col = plan[:, PlanField.EULER.start + 2]              # column 11
     yaw_rate_col = plan[:, PlanField.ORIENTATION_RATE.start + 2]  # column 14
-    v_plan_col = plan[:, PlanField.VELOCITY.start]             # column 3
     t_idxs = np.asarray(T_IDXS, dtype=np.float32)
 
-    psi_at_delay = float(np.interp(delay, t_idxs, yaw_col))
+    # Master drive_helpers get_curvature_from_plan: below
+    # MIN_STABLE_DELAY the heading target is read at the stable point
+    # and scaled linearly (psi/(v*delay) would otherwise blow up as
+    # delay -> 0), and the current-curvature term divides by EGO
+    # speed, not plan v[0].
+    if delay < _MIN_STABLE_DELAY:
+        psi_at_delay = (delay / _MIN_STABLE_DELAY) * float(
+            np.interp(_MIN_STABLE_DELAY, t_idxs, yaw_col))
+    else:
+        psi_at_delay = float(np.interp(delay, t_idxs, yaw_col))
     avg_k = psi_at_delay / (v * delay)
-
-    # `current_curvature_desired = curvatures[0]` in openpilot — but
-    # our model doesn't emit per-step curvature directly, so we infer
-    # it from yaw_rate / v_plan at t=0.
-    v_plan_0 = max(float(v_plan_col[0]), MIN_SPEED)
-    cur_k = float(yaw_rate_col[0]) / v_plan_0
+    cur_k = float(yaw_rate_col[0]) / v
 
     desired_k = 2.0 * avg_k - cur_k
 
@@ -271,9 +280,16 @@ def desired_curvature_lag_adjusted(
     # tapering back to the ISO 0.2 wherever v^2*0.35 would exceed the
     # comfort bound — the lat-accel clamp stays the binding limit.
     if lat_accel_max_mps2 is not None:
-        lim = float(lat_accel_max_mps2) / (v * v)
-        k_cap = float(np.clip(lim, 0.2, 0.35))
-        safe_desired_k = float(np.clip(safe_desired_k, -lim, lim))
+        # Roll compensation, as in master clip_curvature: on a banked
+        # road gravity supplies part of the centripetal force, so the
+        # TIRE lateral budget shifts by the bank term. roll_glat =
+        # g * z-of-right-axis (negative = right side dips = bank
+        # assists right/positive-k turns in our sign convention).
+        m = float(lat_accel_max_mps2)
+        safe_desired_k = float(np.clip(
+            safe_desired_k, (-m - roll_glat) / (v * v),
+            (m - roll_glat) / (v * v)))
+        k_cap = float(np.clip(m / (v * v), 0.2, 0.35))
         safe_desired_k = float(np.clip(safe_desired_k, -k_cap, k_cap))
     return safe_desired_k
 
