@@ -52,6 +52,15 @@ from simsteer.paths import model_path
 
 SUPERCOMBO_PATH = model_path("driving_supercombo.onnx")
 
+
+def _default_supercombo():
+    """The canonical name, else any driving_supercombo*.onnx (models
+    are kept under release names like driving_supercombo_CD210.onnx)."""
+    if SUPERCOMBO_PATH.exists():
+        return SUPERCOMBO_PATH
+    hits = sorted(SUPERCOMBO_PATH.parent.glob("driving_supercombo*.onnx"))
+    return hits[0] if hits else SUPERCOMBO_PATH
+
 # Stds come out in log-space; clip before exp like openpilot's safe_exp
 # (above ~11 the float16-trained values are garbage anyway).
 _EXP_CLIP = 11.0
@@ -77,7 +86,7 @@ class SupercomboModel:
             providers = ["CPUExecutionProvider"]
         from pathlib import Path
         self.session = _make_session(
-            Path(model_path) if model_path else SUPERCOMBO_PATH,
+            Path(model_path) if model_path else _default_supercombo(),
             providers, intra_op_threads)
         self.active_provider = self.session.get_providers()[0]
 

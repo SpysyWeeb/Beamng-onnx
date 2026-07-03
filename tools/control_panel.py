@@ -367,18 +367,38 @@ class App:
         # maps / camera pose must not bleed into other vehicles
         self._game_key = ("beamng" if vehicle == "bastion"
                           else f"beamng-{vehicle}")
-        self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
-                                 fov_h_deg=CAM_FOV_H_DEG,
-                                 height_m=self._cam_height,
-                                 lateral_sign=CAM_LATERAL_SIGN)
-        # World FIRST, GPU session second (RDNA4 level-load VRAM rule).
-        self.world = BeamNGOnnxWorld(
-            map_name=getattr(args, "map", None) or "west_coast_usa",
-            vehicle_model=getattr(args, "vehicle", None) or "bastion",
-            attach=bool(getattr(args, "attach", False)))
-        n_traffic = int(getattr(args, "traffic", 0) or 0)
-        if n_traffic > 0:
-            self.world.spawn_traffic(n_traffic)
+        self.screen_mode = bool(getattr(args, "screen", False))
+        self._vision_v = 0.0
+        if self.screen_mode:
+            # No-tech.key mode: game-window capture + virtual wheel,
+            # zero beamngpy. Camera geometry comes from the captured
+            # window + the in-game hood-cam FOV; LiveCalib learns
+            # pitch/height on top like a fresh comma install. State
+            # files live under their own "screen" key.
+            from simsteer.io.screen_world import ScreenWorld
+            self.world = ScreenWorld(
+                window_hint=getattr(args, "window", None) or "BeamNG",
+                fov_h_deg=float(getattr(args, "fov", None) or 90.0))
+            self._game_key = "screen"
+            self._cam_height = 1.2      # unknown; LiveCalib refines
+            self.calib = Calibration(image_w=self.world.frame_w,
+                                     image_h=self.world.frame_h,
+                                     fov_h_deg=self.world.fov_h_deg,
+                                     height_m=self._cam_height,
+                                     lateral_sign=CAM_LATERAL_SIGN)
+        else:
+            self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
+                                     fov_h_deg=CAM_FOV_H_DEG,
+                                     height_m=self._cam_height,
+                                     lateral_sign=CAM_LATERAL_SIGN)
+            # World FIRST, GPU session second (RDNA4 level-load rule).
+            self.world = BeamNGOnnxWorld(
+                map_name=getattr(args, "map", None) or "west_coast_usa",
+                vehicle_model=getattr(args, "vehicle", None) or "bastion",
+                attach=bool(getattr(args, "attach", False)))
+            n_traffic = int(getattr(args, "traffic", 0) or 0)
+            if n_traffic > 0:
+                self.world.spawn_traffic(n_traffic)
 
         # per-game config: CAL persists the measured lookahead here.
         # Loaded BEFORE the model so the action_t horizons fed to the
@@ -638,6 +658,11 @@ class App:
         self.set_banner(f"DISENGAGED ({reason})")
 
     def start_cal(self) -> None:
+        if getattr(self.world, "no_telemetry", False):
+            self.set_banner("CAL needs tech mode (telemetry + teleport); "
+                            "screen mode learns the rack online instead",
+                            5.0)
+            return
         if getattr(self.world, "attached", False):
             self.set_banner("CAL teleports to the west_coast_usa spawn — "
                             "unavailable in attach/freeroam mode", 5.0)
@@ -900,6 +925,15 @@ class App:
                                      dt=dt,
                                      roll_glat=self.tel.snapshot().get(
                                          "roll_glat", 0.0))
+            if self.screen_mode and wheel is not None:
+                # screen mode has no CAL and no telemetry: learn the
+                # axis->wheel rack online from our own command vs the
+                # model-observed yaw — upstream simsteer's gamepad-mode
+                # design. (The tech-mode ban on online rack learning
+                # is about CAL being the sole writer; here CAL cannot
+                # exist.)
+                self.lp.update(steer, v_ego, wheel,
+                               commanded_axis=steer)
             if self.long_mode == "off":
                 # steering only — no throttle/brake API calls, so the
                 # player's own pedal inputs pass through untouched
@@ -1305,6 +1339,15 @@ def main() -> int:
                     help="with --split: path to a driving_vision .onnx")
     ap.add_argument("--policy", default=None,
                     help="with --split: path to a driving_policy .onnx")
+    ap.add_argument("--screen", action="store_true",
+                    help="no-tech.key mode: capture the game window "
+                         "(hood cam) and drive via a virtual wheel — "
+                         "no beamngpy")
+    ap.add_argument("--window", default="BeamNG",
+                    help="with --screen: window title/class substring")
+    ap.add_argument("--fov", type=float, default=90.0,
+                    help="with --screen: horizontal FOV (deg) of the "
+                         "in-game hood cam")
     args = ap.parse_args()
 
     app = App(args)
@@ -1366,6 +1409,13 @@ def main() -> int:
             t_c = time.monotonic()
             tel = app.tel.snapshot()
             v_ego = tel["v_ego"]
+            if app.screen_mode:
+                # no telemetry: the model's own ego-speed estimate
+                # (pose vx, 0.5%-accurate vs ground truth in tech
+                # mode) is the speed source, lightly filtered
+                app._vision_v += 0.25 * (
+                    max(0.0, float(d.pose[0])) - app._vision_v)
+                v_ego = app._vision_v
             app.control_tick(d, v_ego, dt)
             perf["ctl"] += time.monotonic() - t_c
             if panel.held_desire:
