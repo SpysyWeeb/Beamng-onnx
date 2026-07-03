@@ -693,9 +693,12 @@ class App:
         # response). Under-leading self-inflates: the late response
         # leaves the car wide mid-curve, the model asks for extra
         # curvature, and the want/act chart splits ~25% on every ramp.
-        # 0.25 covers the vehicle side; the EPS constant rides on top.
+        # 0.30 covers the vehicle side (upper end of the measured
+        # 0.30-0.35); the EPS constant rides on top. The deliberate
+        # early-turn-in preference lives in curvature_anticipation_s,
+        # NOT here — this number is the physics.
         self.cfg.lookahead_s = float(np.clip(
-            0.25 + self.cfg.steer_smooth_s, 0.10, 0.40))
+            0.30 + self.cfg.steer_smooth_s, 0.10, 0.40))
 
         # Pedal-map fit: achieved accel vs pedal position, slope with
         # intercept (the intercept absorbs drag/rolling resistance —

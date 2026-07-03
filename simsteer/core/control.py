@@ -104,14 +104,13 @@ class ControllerConfig:
     # Anticipation buffer added to `lookahead_s` when computing
     # `desired_curvature_lag_adjusted`. Reads the plan's heading at
     # `lookahead_s + curvature_anticipation_s` into the future.
-    # openpilot uses +0.2 s here ("for other delays"), but for the
-    # sim's gamepad->game path that anticipates corners too early
-    # (the truck turns in before the bend), so we default to 0.0 —
-    # turn-in happens later. Lower still (negative) reacts even
-    # closer to the present; the loop's k/l keys nudge this live.
-    # Negative subtracts from lookahead — the function floors total
-    # delay at 1 ms so negative values can't break the math.
-    curvature_anticipation_s: float = 0.0
+    # lookahead_s covers the MEASURED response lag (CAL-set); this is
+    # the deliberate turn-in-early preference on top. 0.05 (was 0.0,
+    # 2026-07-02): the car hugged the outside of every curve — turning
+    # in slightly before the geometry beats arriving wide and paying
+    # for it with a cross-lane correction on exit. Negative reacts
+    # closer to the present (function floors total delay at 1 ms).
+    curvature_anticipation_s: float = 0.05
 
     # ISO lateral limits (openpilot drive_helpers.clip_curvature,
     # EU-guideline constants). When lat_jerk_max_mps3 is set the
@@ -134,7 +133,12 @@ class ControllerConfig:
     # clip_curvature behavior (lat-g window with road-roll
     # compensation + the speed-aware 0.2-0.35 curvature ceiling) —
     # real openpilot runs 3.0 on real EPS hardware.
-    lat_jerk_max_mps3: float | None = 10.0
+    # 15 (was 10): the wind-in rate is the last controllable delay in
+    # the turn-in chain now that the clamps are gone. The unwind
+    # asymmetry (2.33x) rides on this, so exits straighten faster too
+    # — both ends of the "hugs the outside then gets thrown across the
+    # lane" complaint (2026-07-02).
+    lat_jerk_max_mps3: float | None = 15.0
     lat_accel_max_mps2: float = 0.0
     # First-order smoothing on the final steering axis — emulated EPS
     # actuator dynamics. A real steering motor is a mechanical low-pass
