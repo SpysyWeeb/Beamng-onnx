@@ -41,24 +41,19 @@ def mk(v_plan: float, yaw_rate_fn=lambda t: 0.0, turn_p: float = 0.0):
                    leads_std=np.ones((3, 6, 4)))
 
 
-def test_turn_governor():
+def test_corner_scanner():
+    # The turn governor was removed; the corner scanner (comfort-based
+    # brake-for-the-bend) stays and follows the plan's own curvature.
     cfg = ControllerConfig()
     lc = LongitudinalController(cfg)
     lc.compute(mk(9.0), 9.0, mode="exp")
     check("straight street untouched", lc.last_v_target > 8.5)
-    lc.compute(mk(8.0, lambda t: 0.5 if 2 <= t <= 5 else 0.0), 8.0, mode="exp")
-    check("90-deg turn 3 s out clamps to turn speed",
-          abs(lc.last_v_target - cfg.turn_speed_mps) < 0.01,
-          f"vT={lc.last_v_target:.2f}")
     lc.compute(mk(25.0, lambda t: 0.125), 25.0, mode="exp")
-    check("highway sweeper (k=0.005) NOT clamped to turn speed",
+    check("highway sweeper (k=0.005) barely slowed",
           lc.last_v_target > 15.0, f"vT={lc.last_v_target:.2f}")
     lc.compute(mk(20.0, lambda t: 0.3), 20.0, mode="exp")
-    check("canyon bend governed by corner scanner (~sqrt(3/k))",
+    check("canyon bend scanned to ~sqrt(max_lat/k)",
           13.0 < lc.last_v_target < 15.0, f"vT={lc.last_v_target:.2f}")
-    lc.compute(mk(9.0, turn_p=0.6), 9.0, mode="exp")
-    check("desire-commanded turn clamps",
-          abs(lc.last_v_target - cfg.turn_speed_mps) < 0.01)
 
 
 def test_fb_integrator_gate():
@@ -165,7 +160,7 @@ def test_action_head_override():
 
 
 if __name__ == "__main__":
-    test_turn_governor()
+    test_corner_scanner()
     test_fb_integrator_gate()
     test_no_vision_intervention()
     test_curvature_clip()

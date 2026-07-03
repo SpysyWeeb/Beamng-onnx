@@ -272,22 +272,6 @@ class ControllerConfig:
     stop_hold_speed: float = 1.5
     stop_hold_brake: float = 0.3
     stop_brake_ramp_s: float = 1.0
-    # Creep probe — the deadlock breaker (caught live 2026-07-02: the
-    # hold waits for the plan to want motion, but from a stopped scene
-    # this model often needs to SEE motion before it re-plans any).
-    # After creep_probe_after_s held at a plan-zero standstill with no
-    # lead, release the brake for creep_probe_len_s so the automatic's
-    # creep advances the scene — the sim analog of an openpilot driver
-    # tapping the gas to resume. Capped at creep_probe_max probes per
-    # stop so a genuine red light gets an inch-forward or two, not a
-    # slow crawl into the intersection.
-    creep_probe_after_s: float = 8.0
-    # Probe ends when the car has ROLLED this far (a real scene
-    # change for the model), or at the timeout — a fixed short
-    # release barely moved the car through the drivetrain lag.
-    creep_probe_dist_m: float = 0.6
-    creep_probe_len_s: float = 3.0
-    creep_probe_max: int = 2
     # Closed loop on MEASURED acceleration — openpilot's actual long
     # mechanism (controlsd runs a PID on a_target vs a_ego; it doesn't
     # "learn" gains, feedback adapts to the vehicle in real time).
@@ -396,23 +380,12 @@ class ControllerConfig:
     # the hood-cam-on-AC case where the model registered curves but
     # the scanner truncated before reaching them.
     corner_scan_horizon_s: float = 6.0
-    # Intersection-turn speed governor. Without nav the model commits
-    # to a turn late, so the plan's PEAK curvature appears only 1-2 s
-    # out — too late for the corner scanner alone to shed speed
-    # (logged failure: 9.2 m/s entry into a 5 m-radius corner that
-    # supports 3.9). Two earlier tells clamp v_target to
-    # `turn_speed_mps` (human city-turn pace):
-    #  - desire_state turnLeft+turnRight belief > `turn_desire_prob`
-    #    (fires for user-commanded TURN-button turns; the model keeps
-    #    desire at "none" for its own spontaneous route choices), or
-    #  - heading change accumulated through tight (r < 50 m) arcs of
-    #    the scanned plan > `turn_yaw_span_rad` — a 90-deg turn shows
-    #    its heading span seconds before its peak curvature, while
-    #    highway sweepers accumulate nothing.
-    # Set turn_speed_mps 0 to disable.
-    turn_speed_mps: float = 4.5
-    turn_desire_prob: float = 0.3
-    turn_yaw_span_rad: float = 0.5
+    # (The intersection-turn speed governor was removed 2026-07-03:
+    # it slowed to a walking pace at detected turns because the model
+    # entered them too hot — but that was the speed under-read making
+    # it mis-plan turn speed, now fixed at the source. Trust the
+    # model's own turn-speed plan; the corner scanner above still
+    # provides comfort-based braking for the bend.)
 
     # ----- ACC / lead following -----
     # The model emits 3 lead-vehicle hypotheses with (x, y, v, a) at
@@ -714,10 +687,6 @@ class LongitudinalController:
         self._spd_scale = 1.0
         self._was_moving = False
         self._stop_brake = 0.0
-        self._hold_t = 0.0
-        self._probe_t = 0.0
-        self._probe_dist = 0.0
-        self._probe_count = 0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -750,10 +719,6 @@ class LongitudinalController:
         self._spd_scale = 1.0
         self._was_moving = False
         self._stop_brake = 0.0
-        self._hold_t = 0.0
-        self._probe_t = 0.0
-        self._probe_dist = 0.0
-        self._probe_count = 0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -828,7 +793,6 @@ class LongitudinalController:
         v_safe_corner = float("inf")
         corner_t = 0.0
         corner_k = 0.0
-        turn_yaw_span = 0.0
         if cfg.max_lat_accel_mps2 > 0.0:
             scan_horizon = max(t, float(cfg.corner_scan_horizon_s))
             mask = (self._T_IDXS >= 0.0) & (self._T_IDXS <= scan_horizon)
@@ -847,25 +811,6 @@ class LongitudinalController:
                 corner_k = float(ks_scan[idx_min])
                 if v_safe_corner < v_target:
                     v_target = v_safe_corner
-            # Heading change accumulated through TIGHT (r < 50 m)
-            # stretches of the scanned plan. A 90-degree intersection
-            # turn announces most of its heading span seconds before
-            # its peak curvature is drawn (logged: plan velocity and
-            # yaw committed ~4 s out while executed k was still tiny),
-            # while highway sweepers (k < 0.02) accumulate nothing.
-            if ts_scan.size > 1:
-                dts = np.diff(ts_scan)
-                wr = np.abs(yaw_rate_plan[mask])[1:]
-                tight = ks_scan[1:] > 0.02
-                turn_yaw_span = float(np.sum(wr[tight] * dts[tight]))
-
-        if cfg.turn_speed_mps > 0.0:
-            turn_p = float(decoded.desire_state[1] + decoded.desire_state[2])
-            if ((turn_p > cfg.turn_desire_prob
-                 or turn_yaw_span > cfg.turn_yaw_span_rad)
-                    and v_target > cfg.turn_speed_mps):
-                v_target = cfg.turn_speed_mps
-                a_target = min(a_target, 0.0)
 
 
         # ACC / lead following. The most-confident lead (index 0 in
@@ -1055,43 +1000,22 @@ class LongitudinalController:
                         and a_cmd < 0.2 and v_target < 1.0)
             if not stopping:
                 self._stop_brake = 0.0
-                self._hold_t = 0.0
-                self._probe_t = 0.0
-                self._probe_count = 0
-            if stopping and self._probe_t > 0:
-                # CREEP PROBE: brake released, the automatic's creep
-                # rolls the car so the model sees motion and can
-                # re-plan (it stays 'stopping' until the plan asks
-                # for real speed, which exits this state entirely).
-                self._probe_t -= dt
-                self._probe_dist += v_ego * dt
-                throttle, brake = 0.0, 0.0
-                if (self._probe_t <= 0
-                        or self._probe_dist >= cfg.creep_probe_dist_m):
-                    self._probe_t = 0.0
-                    self._hold_t = 0.0     # re-hold, wait again
-            elif stopping:
+            if stopping:
                 # Came to a stop while driving: ramp the brake up and
                 # hold against automatic creep (openpilot LongControl
-                # 'stopping' ramps to stopAccel the same way). Releases
-                # the moment the plan wants speed again (v_target).
-                # NOT armed before the first movement — holding at
-                # engage-from-standstill deadlocks: the model sees a
-                # parked scene and plans zero forever (creep is what
-                # seeds a standstill launch).
+                # 'stopping' does the same). Releases the moment the
+                # plan wants speed again (v_target >= 1, which exits
+                # the stopping state entirely). NOT armed before the
+                # first movement — holding at engage-from-standstill
+                # would deadlock a parked-scene plan. (The creep probe
+                # that used to break post-stop deadlocks was removed
+                # 2026-07-03: the phantom stops it patched came from the
+                # speed under-read, now fixed at the source.)
                 ramp = cfg.stop_hold_brake * dt / max(cfg.stop_brake_ramp_s,
                                                       1e-3)
                 self._stop_brake = min(cfg.stop_hold_brake,
                                        self._stop_brake + ramp)
                 throttle, brake = 0.0, self._stop_brake
-                self._hold_t += dt
-                if (self._hold_t > cfg.creep_probe_after_s
-                        and self._probe_count < cfg.creep_probe_max
-                        and lead_x > 60.0 and not aeb):
-                    self._probe_t = cfg.creep_probe_len_s
-                    self._probe_dist = 0.0
-                    self._probe_count += 1
-                    self._stop_brake = 0.0
             elif a_cmd + drag_eff >= 0.0:
                 # Gear-dependent engine delivery: scale the DEMAND fed
                 # to the table by the measured per-speed correction
