@@ -225,10 +225,15 @@ class StartPanel:
                 env = dict(os.environ)
                 env["RADV_DEBUG"] = (env.get("RADV_DEBUG", "")
                                      + ",nocompute").lstrip(",")
+                # start_new_session: detach the game from our terminal's
+                # process group. Since the launcher auto-closes after
+                # START, users close the (now idle-looking) terminal —
+                # without setsid that terminal's hangup signal reached
+                # the game and shut it down cleanly mid-drive.
                 subprocess.Popen(
                     ["nice", "-n", "10", exe, "-nosteam",
                      "-tcom", "-tport", str(TECH_PORT)],
-                    cwd=self.path, env=env,
+                    cwd=self.path, env=env, start_new_session=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.log("waiting for the tech port (game boot takes "
                          "a minute or two) ...")
@@ -279,7 +284,10 @@ class StartPanel:
                 os.path.join(ROOT, "tools", "control_panel.py")]
             env = dict(os.environ)
             env.setdefault("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
-            subprocess.Popen(prefix + args, cwd=ROOT, env=env)
+            # detached for the same reason as the game above: the
+            # control panel must survive the terminal that ran start.sh
+            subprocess.Popen(prefix + args, cwd=ROOT, env=env,
+                             start_new_session=True)
             self.log("control panel launching - its window appears "
                      "once the scenario loads.")
             self.log("closing this launcher ...")
