@@ -62,6 +62,12 @@ class Decoded:
     lead_prob: np.ndarray         # (3,)
     leads: np.ndarray             # (3, 6, 4) — mu(x, y, v, a) per lead/timestep
     leads_std: np.ndarray         # (3, 6, 4) — same shape, std deviations
+    # Direct action head (big_driving_supercombo): [lat_action, accel]
+    # at the model's requested action_t horizon. None on models whose
+    # action slot is padding (CD210) — those derive from the plan.
+    # master get_action_from_model: desiredCurvature = action[0] /
+    # max(1, v_ego)^2, desiredAcceleration = action[1].
+    action: np.ndarray | None = None
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -182,6 +188,7 @@ def desired_curvature_lag_adjusted(
     lat_jerk_max_mps3: float | None = None,
     lat_accel_max_mps2: float | None = None,
     roll_glat: float = 0.0,
+    override_desired_k: float | None = None,
 ) -> float:
     """Lag-adjusted desired curvature, ported from openpilot's
     `selfdrive/controls/lib/drive_helpers.py:get_lag_adjusted_curvature`.
@@ -216,6 +223,15 @@ def desired_curvature_lag_adjusted(
     buf = EXTRA_LAG_BUFFER_S if extra_buffer_s is None else float(extra_buffer_s)
     delay = max(float(steer_actuator_delay) + buf, 1e-3)
 
+    if override_desired_k is not None:
+        # Direct action head (big model): the network already computed
+        # the curvature for t+action_t, so the plan psi math is
+        # skipped — but the rate limiter and clamps below still apply.
+        desired_k = float(override_desired_k)
+        return _shape_desired_k(desired_k, v, last_desired_curvature,
+                                lat_jerk_max_mps3, lat_accel_max_mps2,
+                                roll_glat)
+
     yaw_col = plan[:, PlanField.EULER.start + 2]              # column 11
     yaw_rate_col = plan[:, PlanField.ORIENTATION_RATE.start + 2]  # column 14
     t_idxs = np.asarray(T_IDXS, dtype=np.float32)
@@ -240,6 +256,22 @@ def desired_curvature_lag_adjusted(
     # plan curvature gets ramped over many frames.
     #
     # Two forms:
+    return _shape_desired_k(desired_k, v, last_desired_curvature,
+                            lat_jerk_max_mps3, lat_accel_max_mps2,
+                            roll_glat)
+
+
+
+
+def _shape_desired_k(desired_k: float, v: float,
+                     last_desired_curvature: float,
+                     lat_jerk_max_mps3: float | None,
+                     lat_accel_max_mps2: float | None,
+                     roll_glat: float) -> float:
+    """Shared shaping for a desired curvature, whatever produced it
+    (plan psi math or a direct model action head): the ISO-jerk
+    rate limiter with unwind asymmetry, then the optional lat-accel
+    window (with roll compensation) and speed-aware ceiling."""
     #  - ISO lateral-jerk (current openpilot, drive_helpers.clip_curvature):
     #    max_rate = MAX_LATERAL_JERK / v^2. Speed-aware the right way
     #    around — a slow car may swing the wheel fast (city corners,

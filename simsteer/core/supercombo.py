@@ -168,6 +168,14 @@ class SupercomboModel:
         ll_prob = _sigmoid(flat[self.output_slices["lane_lines_prob"]])[1::2]
         lead_prob = _sigmoid(flat[self.output_slices["lead_prob"]])
         desire_state = _softmax(flat[self.output_slices["desire_state"]])
+        # Direct action head: present on big_driving_supercombo
+        # (slice of 4 = [lat_action, accel] + stds), None-padded on
+        # CD210. First two raw values, no transform (master's parser
+        # doesn't touch 'action'; get_action_from_model reads [0,0]
+        # and [0,1] raw).
+        act_sl = self.output_slices.get("action")
+        action = (flat[act_sl][:2].copy()
+                  if isinstance(act_sl, slice) else None)
 
         return Decoded(
             plan=plan, plan_std=plan_std,
@@ -179,6 +187,7 @@ class SupercomboModel:
             desire_state=desire_state,
             lead_prob=lead_prob,
             leads=leads, leads_std=leads_std,
+            action=action,
         )
 
 

@@ -379,6 +379,15 @@ class App:
         n_traffic = int(getattr(args, "traffic", 0) or 0)
         if n_traffic > 0:
             self.world.spawn_traffic(n_traffic)
+
+        # per-game config: CAL persists the measured lookahead here.
+        # Loaded BEFORE the model so the action_t horizons fed to the
+        # network match our real lat/long action timing.
+        cfg = ControllerConfig.load(game=self._game_key)
+        cfg.wheelbase_m = self.wheelbase
+        cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
+        self.cfg = cfg
+
         if args.split:
             self.model = DrivingModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
@@ -394,12 +403,17 @@ class App:
             model_path = getattr(args, "model", None) or None
             self.model = SupercomboModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
-                intra_op_threads=3, model_path=model_path)
+                intra_op_threads=3, model_path=model_path,
+                lat_action_t=cfg.lookahead_s + cfg.curvature_anticipation_s,
+                long_action_t=cfg.lookahead_s + cfg.long_anticipation_s)
             self._decode = lambda i, b, d: self.model.decode(
                 self.model.step(i, b, desire=d))
+            has_action = isinstance(
+                self.model.output_slices.get("action"), slice)
             name = (f"supercombo ({self.model.active_provider})"
                     + (f" [{os.path.basename(model_path)}]"
-                       if model_path else ""))
+                       if model_path else "")
+                    + (" +action-head" if has_action else ""))
         print(f"[panel] model: {name}", flush=True)
 
         self.queue = FrameQueue()
@@ -414,11 +428,6 @@ class App:
         except Exception as exc:
             print(f"[panel] in-game panel load skipped: {exc}", flush=True)
 
-        # per-game config: CAL persists the measured lookahead here
-        cfg = ControllerConfig.load(game=self._game_key)
-        cfg.wheelbase_m = self.wheelbase
-        cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
-        self.cfg = cfg
         # after cfg: the 100 Hz steering executor takes its EPS time
         # constant from it (constructing this earlier crashed on boot)
         self.sender = ControlSender(self.world,

@@ -531,6 +531,14 @@ class LateralController:
         # of ms even if the plan jumps. Comma's rate is speed-
         # interpolated and gives ~850 ms turn-in at highway speed,
         # which is what feels natural in their own car.
+        # Big-model direct action head: the network computed the
+        # curvature for t+action_t itself (master prefers this path
+        # whenever a model has a real action output). The plan psi
+        # math is skipped; the rate limiter + clamps still shape it.
+        override_k = None
+        if getattr(decoded, "action", None) is not None:
+            override_k = (float(decoded.action[0])
+                          / max(1.0, v_ego) ** 2)
         k_raw = desired_curvature_lag_adjusted(
             decoded.plan, v_ego,
             steer_actuator_delay=cfg.lookahead_s,
@@ -540,6 +548,7 @@ class LateralController:
             lat_accel_max_mps2=(cfg.lat_accel_max_mps2
                                 if cfg.lat_accel_max_mps2 > 0 else None),
             roll_glat=roll_glat,
+            override_desired_k=override_k,
         )
         self.last_desired_k_raw = k_raw
         k_total = k_raw

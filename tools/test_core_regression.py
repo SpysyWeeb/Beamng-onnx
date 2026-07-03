@@ -159,6 +159,26 @@ def test_understeer_ff():
           1.15 < boost < 1.6, f"boost@25 vs 10 m/s = {boost:.2f}")
 
 
+def test_action_head_override():
+    # big-model direct action head: lateral must track action[0]/v^2
+    # (rate-limited), ignoring the plan psi math
+    from simsteer.core.control import LateralController
+    cfg = ControllerConfig()
+    lc = LateralController(cfg)
+    d = mk(20.0)                       # plan says dead straight
+    d.action = np.array([0.004 * 400.0, 0.0], dtype=np.float32)  # k=0.004
+    for _ in range(40):                # let the rate limiter converge
+        lc.compute(d, 20.0)
+    check("action head drives curvature despite straight plan",
+          abs(lc.last_curvature - 0.004) < 5e-4,
+          f"k={lc.last_curvature:.4f} (want 0.004)")
+    lc.reset()
+    d2 = mk(20.0)                      # action=None -> plan path: ~0
+    lc.compute(d2, 20.0)
+    check("no action head -> plan path unaffected",
+          abs(lc.last_curvature) < 5e-4)
+
+
 if __name__ == "__main__":
     test_turn_governor()
     test_fb_integrator_gate()
@@ -166,5 +186,6 @@ if __name__ == "__main__":
     test_curvature_clip()
     test_min_stable_delay()
     test_understeer_ff()
+    test_action_head_override()
     print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILURES: {FAILS}'}")
     sys.exit(1 if FAILS else 0)
