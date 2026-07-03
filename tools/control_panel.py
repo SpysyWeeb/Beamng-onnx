@@ -1361,14 +1361,22 @@ def main() -> int:
     ap.add_argument("--fov", type=float, default=90.0,
                     help="with --screen: horizontal FOV (deg) of the "
                          "in-game hood cam")
+    ap.add_argument("--classic", action="store_true",
+                    help="use the legacy hand-drawn cv2 UI instead of "
+                         "the dearpygui one")
     args = ap.parse_args()
 
     app = App(args)
+    bridge = ModBridge(app)
+    bridge.start()
+    if not args.classic:
+        # default: the crisp dearpygui view (engine runs on a thread).
+        from control_panel_view import run_view
+        return run_view(app)
+
     panel = Panel(app)
     btn_y0 = CAM_VIEW_H + TELEM_H + 4
     panel.layout(btn_y0)
-    bridge = ModBridge(app)
-    bridge.start()
 
     canvas = np.zeros((TOTAL_H, UI_W, 3), dtype=np.uint8)
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
