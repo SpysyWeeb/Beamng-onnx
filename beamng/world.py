@@ -51,7 +51,11 @@ CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 VEHICLE_SPECS = {
     "bastion": dict(cam_pos=CAM_POS, cam_height_m=CAM_HEIGHT_M,
                     wheelbase_m=2.9, part_config=None),
-    "pickup": dict(cam_pos=(0.0, -0.35, 1.66), cam_height_m=1.66,
+    # windshield glass plane from pickup_glass.jbeam: roof edge
+    # (0, -0.36, 1.76) -> mid glass (0, -0.67, 1.49); at z=1.66 the
+    # glass sits at y ~ -0.48. Mount 3 cm outside it — the first
+    # guess (-0.35) was 13 cm behind the glass, inside the mirror.
+    "pickup": dict(cam_pos=(0.0, -0.51, 1.66), cam_height_m=1.66,
                    wheelbase_m=3.5,
                    part_config="vehicles/pickup/"
                                "d15_crew_shortbed_4wd_A.pc"),
