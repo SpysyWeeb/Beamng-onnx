@@ -141,10 +141,17 @@ class ControllerConfig:
     lat_jerk_max_mps3: float | None = 15.0
     lat_accel_max_mps2: float = 0.0
     # Understeer gradient for the FF wheel target: multiplier
-    # (1 + kv*v^2), capped at 1.6x. 0 disables. Fit from logged
-    # in-curve delivery gain vs speed (see compute()); CAL could
-    # measure this directly with multi-speed pulses someday.
-    understeer_kv: float = 0.00055
+    # (1 + kv*v^2), capped at understeer_cap. 0 disables. Re-fit
+    # 2026-07-03 (run_160115): the 0.00055 fit still left in-curve
+    # delivery at 0.88 (0.82 on lane changes) — the truck ran wide and
+    # drifted lanes on long highway curves. Raw delivery (no FF) is
+    # ~0.75 at 18 m/s, ~0.65 at 25 m/s; 0.0009 brings both bands to
+    # ~1.0. Cap raised to 1.8 so 24-25 m/s isn't clipped mid-boost.
+    understeer_kv: float = 0.0009
+    understeer_cap: float = 1.8
+    # Extra curvature authority while a lane change is held — see the
+    # authority block in compute(). Stacks on steer_authority.
+    lane_change_authority: float = 1.3
     # First-order smoothing on the final steering axis — emulated EPS
     # actuator dynamics. A real steering motor is a mechanical low-pass
     # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
@@ -580,9 +587,14 @@ class LateralController:
 
         # Authority — flat multiplier on the commanded curvature.
         # openpilot has no such multiplier; we keep a flat one as a
-        # project-specific knob. Lane changes use the model's own
-        # desire pulse + sustained desire input; no separate gain.
+        # project-specific knob. Lane changes get an extra boost: at
+        # highway speed the model's planned lane-change curvature is
+        # modest and, combined with under-delivery, the maneuver falls
+        # short (logged: 2.0 m traversed vs a 3.5 m lane; 6/16 events
+        # under 2 m). The boost only applies while the desire is held.
         authority = cfg.steer_authority
+        if in_lane_change:
+            authority *= cfg.lane_change_authority
         k_total *= authority
 
         self.last_curvature = k_total
@@ -598,7 +610,8 @@ class LateralController:
         # fast sweeper regardless of timing lead. Static measured
         # constant (CAL-doctrine); bounded so a bad config can't
         # triple the wheel.
-        target_wheel *= min(1.0 + cfg.understeer_kv * v_ego * v_ego, 1.6)
+        target_wheel *= min(1.0 + cfg.understeer_kv * v_ego * v_ego,
+                            cfg.understeer_cap)
         self.last_target_wheel = target_wheel
 
         # FF axis from LiveParams inversion. v_ego enters the speed-
