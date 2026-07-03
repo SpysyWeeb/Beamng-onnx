@@ -373,9 +373,14 @@ class App:
         if args.split:
             self.model = DrivingModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
-                policy_providers=["CPUExecutionProvider"], intra_op_threads=3)
+                policy_providers=["CPUExecutionProvider"], intra_op_threads=3,
+                vision_path=getattr(args, "vision", None) or None,
+                policy_path=getattr(args, "policy", None) or None)
             self._decode = lambda i, b, d: decode(*self.model.step(i, b, desire=d))
-            name = f"split ({self.model.active_provider})"
+            vp = getattr(args, "vision", None)
+            name = ("split ({}){}".format(
+                self.model.active_provider,
+                f" [{os.path.basename(vp)}]" if vp else ""))
         else:
             model_path = getattr(args, "model", None) or None
             self.model = SupercomboModel(
@@ -1256,6 +1261,10 @@ def main() -> int:
                          "(default: models/driving_supercombo.onnx)")
     ap.add_argument("--traffic", type=int, default=0,
                     help="spawn N game-managed AI traffic vehicles")
+    ap.add_argument("--vision", default=None,
+                    help="with --split: path to a driving_vision .onnx")
+    ap.add_argument("--policy", default=None,
+                    help="with --split: path to a driving_policy .onnx")
     args = ap.parse_args()
 
     app = App(args)

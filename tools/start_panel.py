@@ -96,19 +96,32 @@ def scan_levels(install: str) -> list[str]:
 
 DEFAULT_MODEL = os.path.join(ROOT, "models", "driving_supercombo.onnx")
 BROWSE = "browse for an .onnx file ..."
-# the split 0.11.1 pair — not runnable as a supercombo
-_SPLIT_PAIR = {"driving_vision.onnx", "driving_policy.onnx"}
 
 
 def scan_models() -> list[str]:
-    """Supercombo-compatible .onnx files under models/ (full paths)."""
+    """Supercombo-compatible .onnx files under models/ (full paths).
+    Split vision/policy halves are excluded — they're not runnable as
+    a supercombo; the SPLIT POLICY mode scans them separately."""
     d = os.path.join(ROOT, "models")
     out = []
     if os.path.isdir(d):
         for f in sorted(os.listdir(d), key=str.lower):
-            if f.endswith(".onnx") and f not in _SPLIT_PAIR:
+            if (f.endswith(".onnx")
+                    and not f.startswith(("driving_vision",
+                                          "driving_policy"))):
                 out.append(os.path.join(d, f))
     return out or [DEFAULT_MODEL]
+
+
+def scan_split(kind: str) -> list[str]:
+    """driving_<kind>*.onnx halves under models/ (kind: vision|policy)."""
+    d = os.path.join(ROOT, "models")
+    out = []
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d), key=str.lower):
+            if f.endswith(".onnx") and f.startswith(f"driving_{kind}"):
+                out.append(os.path.join(d, f))
+    return out
 
 
 def browse_onnx() -> str | None:
@@ -169,6 +182,20 @@ class StartPanel:
         if not os.path.isfile(self.model):
             self.model = self.models[0]
         self.traffic = max(0, min(12, int(cfg.get("traffic", 0))))
+        # model architecture: one supercombo vs split vision+policy
+        self.arch = cfg.get("arch", "supercombo")
+        if self.arch not in ("supercombo", "split"):
+            self.arch = "supercombo"
+        self.vision_models = scan_split("vision")
+        self.policy_models = scan_split("policy")
+        self.vision_model = cfg.get("vision_model") or (
+            self.vision_models[0] if self.vision_models else "")
+        self.policy_model = cfg.get("policy_model") or (
+            self.policy_models[0] if self.policy_models else "")
+        if not os.path.isfile(self.vision_model) and self.vision_models:
+            self.vision_model = self.vision_models[0]
+        if not os.path.isfile(self.policy_model) and self.policy_models:
+            self.policy_model = self.policy_models[0]
         self._cfg_prefix = cfg.get("panel_cmd_prefix")
 
         self.focus: str | None = None      # "path" while typing
@@ -185,7 +212,9 @@ class StartPanel:
     def save(self) -> None:
         data = {"beamng_path": self.path, "tech_key": self.tech_key,
                 "map": self.map, "vehicle": self.vehicle,
-                "model": self.model, "traffic": self.traffic}
+                "model": self.model, "traffic": self.traffic,
+                "arch": self.arch, "vision_model": self.vision_model,
+                "policy_model": self.policy_model}
         if self._cfg_prefix:
             data["panel_cmd_prefix"] = self._cfg_prefix
         json.dump(data, open(CONFIG_PATH, "w"), indent=2)
@@ -270,7 +299,15 @@ class StartPanel:
             args = ["--map", self.map, "--vehicle", self.vehicle]
             if attach:
                 args.append("--attach")
-            if os.path.realpath(self.model) != os.path.realpath(
+            if self.arch == "split":
+                for p, nm in ((self.vision_model, "vision"),
+                              (self.policy_model, "policy")):
+                    if not os.path.isfile(p):
+                        self.log(f"{nm} model missing: {p or '(none)'}")
+                        return
+                args += ["--split", "--vision", self.vision_model,
+                         "--policy", self.policy_model]
+            elif os.path.realpath(self.model) != os.path.realpath(
                     DEFAULT_MODEL):
                 if not os.path.isfile(self.model):
                     self.log(f"model file missing: {self.model}")
@@ -320,6 +357,26 @@ class StartPanel:
                             for m in self.models:
                                 if os.path.basename(m) == val:
                                     self.model = m
+                    elif self.open_dropdown in ("vision", "policy"):
+                        lst = (self.vision_models
+                               if self.open_dropdown == "vision"
+                               else self.policy_models)
+                        if val == BROWSE:
+                            p = browse_onnx()
+                            if p:
+                                if p not in lst:
+                                    lst.append(p)
+                                if self.open_dropdown == "vision":
+                                    self.vision_model = p
+                                else:
+                                    self.policy_model = p
+                        else:
+                            for m in lst:
+                                if os.path.basename(m) == val:
+                                    if self.open_dropdown == "vision":
+                                        self.vision_model = m
+                                    else:
+                                        self.policy_model = m
                     else:
                         self.vehicle = val
             self.open_dropdown = None
@@ -332,8 +389,11 @@ class StartPanel:
                 self.focus = "path"
             elif key == "tech":
                 self.tech_key = not self.tech_key
-            elif key in ("map", "vehicle", "model"):
+            elif key in ("map", "vehicle", "model", "vision", "policy"):
                 self.open_dropdown = key
+            elif key == "arch":
+                self.arch = ("split" if self.arch == "supercombo"
+                             else "supercombo")
             elif key == "traffic_dn":
                 self.traffic = max(0, self.traffic - 1)
             elif key == "traffic_up":
@@ -406,21 +466,27 @@ class StartPanel:
                         (36, y + 58), FONT, 0.45, C_RED, 1, cv2.LINE_AA)
 
         def dropdown(y: int, key: str, label: str, value: str,
-                     note: str) -> None:
-            cv2.putText(c, label, (36, y), FONT, 0.55, C_LABEL, 1,
-                        cv2.LINE_AA)
-            box = (36, y + 14, UI_W - 72, 44)
+                     note: str, x0: int = 36,
+                     width: int = UI_W - 72) -> None:
+            if label:
+                cv2.putText(c, label, (x0, y), FONT, 0.55, C_LABEL, 1,
+                            cv2.LINE_AA)
+            box = (x0, y + 14, width, 44)
             self._rects[key] = box
             cv2.rectangle(c, (box[0], box[1]),
                           (box[0] + box[2], box[1] + box[3]), C_FIELD, -1)
             cv2.rectangle(c, (box[0], box[1]),
                           (box[0] + box[2], box[1] + box[3]), C_DIM, 1)
-            cv2.putText(c, value, (box[0] + 12, box[1] + 29), FONT,
+            val = value
+            max_chars = max(6, (width - 44) // 11)
+            if len(val) > max_chars:
+                val = val[:max_chars - 2] + ".."
+            cv2.putText(c, val, (box[0] + 12, box[1] + 29), FONT,
                         0.58, C_WHITE, 1, cv2.LINE_AA)
             cv2.putText(c, "v", (box[0] + box[2] - 28, box[1] + 29),
                         FONT, 0.6, C_LABEL, 1, cv2.LINE_AA)
             if note:
-                cv2.putText(c, note, (36, y + 84), FONT, 0.45, C_LABEL,
+                cv2.putText(c, note, (x0, y + 84), FONT, 0.45, C_LABEL,
                             1, cv2.LINE_AA)
 
         map_note = ("scripted scenario at the calibrated highway spawn"
@@ -431,9 +497,29 @@ class StartPanel:
         dropdown(560, "vehicle", "VEHICLE", self.vehicle,
                  "CAL gear table + wheelbase are measured for the "
                  "bastion")
-        dropdown(690, "model", "MODEL", os.path.basename(self.model),
-                 "supercombo-compatible .onnx; pick 'browse' in the "
-                 "list to point anywhere on disk")
+        # architecture toggle: the title line is the switch
+        arch_label = ("SUPERCOMBO" if self.arch == "supercombo"
+                      else "SPLIT POLICY")
+        arch_hint = ("[click for split vision+policy]"
+                     if self.arch == "supercombo"
+                     else "[click for single supercombo]")
+        cv2.putText(c, arch_label, (36, 682), FONT, 0.55,
+                    (120, 200, 255), 2, cv2.LINE_AA)
+        cv2.putText(c, arch_hint, (230, 682), FONT, 0.42, C_DIM, 1,
+                    cv2.LINE_AA)
+        self._rects["arch"] = (36, 664, 480, 24)
+        if self.arch == "supercombo":
+            dropdown(690, "model", "", os.path.basename(self.model),
+                     "supercombo-compatible .onnx; pick 'browse' in "
+                     "the list to point anywhere on disk")
+        else:
+            half = (UI_W - 72 - 16) // 2
+            dropdown(692, "vision", "VISION",
+                     os.path.basename(self.vision_model) or "(none)",
+                     "", x0=36, width=half)
+            dropdown(692, "policy", "POLICY",
+                     os.path.basename(self.policy_model) or "(none)",
+                     "", x0=36 + half + 16, width=half)
 
         # traffic scroller: [-] N [+]
         y = 788
@@ -484,6 +570,12 @@ class StartPanel:
             elif self.open_dropdown == "model":
                 opts = [os.path.basename(m) for m in self.models] \
                     + [BROWSE]
+            elif self.open_dropdown == "vision":
+                opts = [os.path.basename(m) for m in self.vision_models] \
+                    + [BROWSE]
+            elif self.open_dropdown == "policy":
+                opts = [os.path.basename(m) for m in self.policy_models] \
+                    + [BROWSE]
             else:
                 opts = self.vehicles
             bx, by, bw, _ = self._rects[self.open_dropdown]
@@ -491,9 +583,12 @@ class StartPanel:
             for opt in opts[:16]:
                 r = (bx, oy, bw, 34)
                 self._drop_rects.append((r, opt))
-                cur = opt == {"map": self.map,
-                              "model": os.path.basename(self.model),
-                              "vehicle": self.vehicle}[self.open_dropdown]
+                cur = opt == {
+                    "map": self.map,
+                    "model": os.path.basename(self.model),
+                    "vision": os.path.basename(self.vision_model),
+                    "policy": os.path.basename(self.policy_model),
+                    "vehicle": self.vehicle}[self.open_dropdown]
                 cv2.rectangle(c, (r[0], r[1]), (r[0] + r[2], r[1] + r[3]),
                               (58, 46, 30) if cur else (38, 30, 20), -1)
                 cv2.rectangle(c, (r[0], r[1]), (r[0] + r[2], r[1] + r[3]),

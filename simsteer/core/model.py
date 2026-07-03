@@ -55,7 +55,9 @@ class DrivingModel:
 
     def __init__(self, providers: list[str] | None = None,
                  policy_providers: list[str] | None = None,
-                 intra_op_threads: int | None = None) -> None:
+                 intra_op_threads: int | None = None,
+                 vision_path: str | None = None,
+                 policy_path: str | None = None) -> None:
         # DirectML accelerates the vision encoder (the big one). The policy
         # head currently fails to initialize on DML (opset-20 op the DML EP
         # rejects with E_INVALIDARG), and at ~3 ms on CPU it isn't the
@@ -64,8 +66,13 @@ class DrivingModel:
             providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
         if policy_providers is None:
             policy_providers = ["CPUExecutionProvider"]
-        self.vision = _make_session(VISION_PATH, providers, intra_op_threads)
-        self.policy = _make_session(POLICY_PATH, policy_providers, intra_op_threads)
+        from pathlib import Path
+        self.vision = _make_session(
+            Path(vision_path) if vision_path else VISION_PATH,
+            providers, intra_op_threads)
+        self.policy = _make_session(
+            Path(policy_path) if policy_path else POLICY_PATH,
+            policy_providers, intra_op_threads)
         self.active_provider = self.vision.get_providers()[0]
         self.policy_provider = self.policy.get_providers()[0]
 
