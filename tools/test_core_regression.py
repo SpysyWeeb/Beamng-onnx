@@ -141,11 +141,30 @@ def test_min_stable_delay():
           f"k(0.05s)={k_small:.4f} k(0.3s)={k_stable:.4f}")
 
 
+def test_understeer_ff():
+    # same curvature demand must produce a larger wheel target at speed
+    from simsteer.core.control import LateralController
+    cfg = ControllerConfig()
+    lc = LateralController(cfg)
+    d = mk(10.0)
+    d.plan[:, 11] = [0.5 * t for t in
+                     LongitudinalController(ControllerConfig())._T_IDXS]
+    lc.compute(d, 10.0)
+    w_slow = abs(lc.last_target_wheel / max(lc.last_curvature, 1e-9))
+    lc.reset()
+    lc.compute(d, 25.0)
+    w_fast = abs(lc.last_target_wheel / max(lc.last_curvature, 1e-9))
+    boost = w_fast / max(w_slow, 1e-9)
+    check("understeer FF boosts wheel-per-curvature with speed",
+          1.15 < boost < 1.6, f"boost@25 vs 10 m/s = {boost:.2f}")
+
+
 if __name__ == "__main__":
     test_turn_governor()
     test_fb_integrator_gate()
     test_no_vision_intervention()
     test_curvature_clip()
     test_min_stable_delay()
+    test_understeer_ff()
     print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILURES: {FAILS}'}")
     sys.exit(1 if FAILS else 0)

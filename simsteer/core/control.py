@@ -140,6 +140,11 @@ class ControllerConfig:
     # lane" complaint (2026-07-02).
     lat_jerk_max_mps3: float | None = 15.0
     lat_accel_max_mps2: float = 0.0
+    # Understeer gradient for the FF wheel target: multiplier
+    # (1 + kv*v^2), capped at 1.6x. 0 disables. Fit from logged
+    # in-curve delivery gain vs speed (see compute()); CAL could
+    # measure this directly with multi-speed pulses someday.
+    understeer_kv: float = 0.00055
     # First-order smoothing on the final steering axis — emulated EPS
     # actuator dynamics. A real steering motor is a mechanical low-pass
     # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
@@ -559,6 +564,16 @@ class LateralController:
         self.last_authority = authority
 
         target_wheel = math.atan(k_total * cfg.wheelbase_m)
+        # Understeer gradient: required steer grows ~(1 + kv*v^2) for
+        # the same curvature (tire slip angles). Measured 2026-07-02
+        # (run_231336, in-curve delivery gain lag-shifted): 0.96 at
+        # 8-15 m/s, 0.82 at 15-22, 0.74 at 22-30 — deficit vs v^2 fits
+        # kv ~ 0.00055 cleanly. Without this the car delivers 3/4 of
+        # the asked curvature at highway speed and rides wide on every
+        # fast sweeper regardless of timing lead. Static measured
+        # constant (CAL-doctrine); bounded so a bad config can't
+        # triple the wheel.
+        target_wheel *= min(1.0 + cfg.understeer_kv * v_ego * v_ego, 1.6)
         self.last_target_wheel = target_wheel
 
         # FF axis from LiveParams inversion. v_ego enters the speed-
