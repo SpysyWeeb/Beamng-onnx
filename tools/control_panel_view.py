@@ -25,9 +25,10 @@ import dearpygui.dearpygui as dpg
 import control_panel as cp
 from control_panel import App, DESIRE_LEN, WARMUP_FRAMES, ROOT
 from simsteer.ui.overlay import draw_overlay
+from telemetry_panel import TelemetryPanel, W
 
 CAM_DW = 900                    # camera display width (px); height per aspect
-PLOT_W, PLOT_H = 292, 150
+PLOT_H = 150
 
 
 class Engine(threading.Thread):
@@ -171,6 +172,7 @@ class ControlView:
     def __init__(self, app: App):
         self.app = app
         self.eng = Engine(app)
+        self.tpanel = TelemetryPanel()
 
     # button/key -> the exact same App.action the cv2 panel used
     def _act(self, cmd):
@@ -234,34 +236,28 @@ class ControlView:
             dpg.add_text("", tag="banner", color=(90, 220, 255))
             dpg.add_image("cam_tex", width=cw, height=ch)
 
+            # telemetry panel (left) beside the plots + text (right)
             with dpg.group(horizontal=True):
-                for tag, title, ylim in (("p_spd", "mph", (0, 60)),
-                                         ("p_acc", "m/s2", (-4, 4)),
-                                         ("p_crv", "curv x1000", (-15, 15))):
-                    with dpg.plot(label=title, height=PLOT_H, width=PLOT_W,
-                                  no_menus=True, no_box_select=True):
-                        dpg.add_plot_axis(dpg.mvXAxis, no_tick_labels=True,
-                                          tag=f"{tag}_x")
-                        yax = dpg.add_plot_axis(dpg.mvYAxis,
-                                                no_tick_labels=False,
-                                                tag=f"{tag}_y")
-                        dpg.set_axis_limits(yax, *ylim)
-                        dpg.add_line_series([], [], parent=yax,
-                                            tag=f"{tag}_want")
-                        dpg.add_line_series([], [], parent=yax,
-                                            tag=f"{tag}_act")
-
-            # telemetry readouts (two columns)
-            with dpg.group(horizontal=True):
-                with dpg.child_window(width=cw // 2, height=150):
-                    dpg.add_text("", tag="t_mode")
-                    dpg.add_text("", tag="t_speed")
-                    dpg.add_text("", tag="t_steer")
-                    dpg.add_text("", tag="t_lat")
-                    dpg.add_text("", tag="t_conf")
-                with dpg.child_window(width=cw // 2 - 8, height=150):
-                    dpg.add_text("", tag="t_accel")
-                    dpg.add_text("", tag="t_pedals")
+                with dpg.group() as tp_parent:
+                    self.tpanel.build(tp_parent)
+                with dpg.group():
+                    for tag, title, ylim in (
+                            ("p_spd", "mph", (0, 60)),
+                            ("p_acc", "m/s2", (-4, 4)),
+                            ("p_crv", "curv x1000", (-15, 15))):
+                        with dpg.plot(label=title, height=PLOT_H,
+                                      width=cw - W - 24, no_menus=True,
+                                      no_box_select=True):
+                            dpg.add_plot_axis(dpg.mvXAxis,
+                                              no_tick_labels=True,
+                                              tag=f"{tag}_x")
+                            yax = dpg.add_plot_axis(dpg.mvYAxis,
+                                                    tag=f"{tag}_y")
+                            dpg.set_axis_limits(yax, *ylim)
+                            dpg.add_line_series([], [], parent=yax,
+                                                tag=f"{tag}_want")
+                            dpg.add_line_series([], [], parent=yax,
+                                                tag=f"{tag}_act")
                     dpg.add_text("", tag="t_rack")
                     dpg.add_text("", tag="t_cam")
                     dpg.add_text("", tag="t_lead")
@@ -326,26 +322,12 @@ class ControlView:
         tel = getattr(app, "_last_tel", {}) or {}
         v = getattr(app, "_last_v", 0.0)
         lo, la, lp = app.long, app.lat, app.lp
-        eng = "ENGAGED" if app.engaged else "manual"
-        dpg.set_value("t_mode", f"{eng}   LONG {app.long_mode.upper()}   "
-                                f"{app.hz:.0f} Hz work")
-        dpg.set_value("t_speed", f"speed  {v*2.237:4.0f} mph   "
-                                 f"cap {app.cfg.max_speed_mps*2.237:.0f}")
+        # the rich telemetry panel (wheel + arcs + readouts + conf)
+        self.tpanel.update(app, tel, v)
         # keep the slider in sync when SPD keys/buttons move the cap
         if not dpg.is_item_active("spd_slider"):
             dpg.set_value("spd_slider",
                           int(round(app.cfg.max_speed_mps * 2.237)))
-        dpg.set_value("t_steer", f"steer  {app.last_steer:+.2f}   "
-                                 f"wheel {tel.get('steering_deg', 0):+.0f}deg")
-        des_lat = v * v * la.last_curvature
-        dpg.set_value("t_lat", f"lat    des {des_lat:+.2f}  "
-                               f"act {v*v*app.k_meas_now:+.2f} m/s2")
-        dpg.set_value("t_conf", f"lanes  {app.conf_now:.2f} conf")
-        dpg.set_value("t_accel", f"accel  cmd {lo.last_a_cmd:+.2f}  "
-                                 f"tgt {lo.last_a_target:+.2f}  "
-                                 f"fb {lo.last_a_fb:+.2f}")
-        dpg.set_value("t_pedals", f"pedals thr {app.last_thr:.2f}  "
-                                  f"brk {app.last_brk:.2f}")
         dpg.set_value("t_rack", f"rack   a={lp.a_linear:+.2f} "
                                 f"n={max(lp.samples, lp.session_samples)} "
                                 f"{'OK' if lp.trusted() else 'COLD'}  "
