@@ -320,6 +320,16 @@ class ControllerConfig:
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
     accel_cmd_min_mps2: float = -3.5
+    # E2E decel envelope (exp mode). A real openpilot e2e model brakes
+    # GENTLY for its OWN plan — over a full real route (incl. real
+    # red-light stops) the model's desiredAcceleration bottomed at
+    # -2.2 m/s^2 and never went below -2.5 (connect route analysis
+    # 2026-07-03). CD210 has no smoothed action head, so its
+    # plan-derived accel can slam to the -3.5 ISO floor on phantom
+    # dips. Cap plan-driven decel to the real envelope so phantom
+    # slowdowns stay gentle (rideable) while real stops still complete
+    # gently; leads and AEB keep full braking authority. 0 disables.
+    e2e_decel_soft_mps2: float = -2.5
     # Longitudinal jerk limits (m/s^3): rate-limit the accel command so
     # pedal transitions are deliberate, not stabs — this is what gives
     # openpilot its "weighted" long feel. Asymmetric: releasing toward
@@ -904,6 +914,13 @@ class LongitudinalController:
         # measure it for us.
         a_cmd = float(np.clip(a_cmd, cfg.accel_cmd_min_mps2,
                               cfg.accel_cmd_max_mps2))
+        # E2E decel envelope: cap plan-driven braking to the real
+        # model's measured floor when the slowdown is the model's own
+        # (open road, no close lead, no AEB). Leads/AEB keep full
+        # authority.
+        if (mode == "exp" and not aeb and self.last_lead_x > 50.0
+                and cfg.e2e_decel_soft_mps2 < 0):
+            a_cmd = max(a_cmd, cfg.e2e_decel_soft_mps2)
         if cfg.long_smooth_s > 0:
             alpha = 1.0 - math.exp(-dt / cfg.long_smooth_s)
             self._a_cmd_smooth += alpha * (a_cmd - self._a_cmd_smooth)
