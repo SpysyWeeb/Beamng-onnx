@@ -503,6 +503,7 @@ class App:
         # buffers drawn on the viewer, plus a per-session CSV run log
         # (every control tick) for offline plots — tools/plot_run.py.
         self.charts_on = True
+        self._last_spd_t = 0.0
         self.chart = {k: deque(maxlen=300)
                       for k in ("v", "vT", "a", "aM", "k", "kM")}
         self._a_meas_app = 0.0
@@ -600,7 +601,13 @@ class App:
             self._snap_req = True
         elif key in ("spd_dn", "spd_up"):
             # step in whole-5-mph notches (55, 60, 65 ...) like a real
-            # cruise stalk; snap first in case the cap started off-grid
+            # cruise stalk; snap first in case the cap started off-grid.
+            # Debounced: dpg key/button handlers repeat at the OS
+            # key-repeat rate, which otherwise ran the cap to its
+            # ceiling in one press.
+            if now - self._last_spd_t < 0.25:
+                return
+            self._last_spd_t = now
             step = -5.0 if key == "spd_dn" else 5.0
             mph = round(self.cfg.max_speed_mps * 2.237 / 5.0) * 5.0 + step
             mph = min(100.0, max(10.0, mph))

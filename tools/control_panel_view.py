@@ -209,6 +209,7 @@ class ControlView:
                 dpg.add_key_press_handler(ku, callback=self._act("spd_up"))
 
     def build(self):
+        app = self.app
         self.eng.start()
         if not self.eng.wait_first():
             raise RuntimeError("no camera frames after 60 s")
@@ -265,6 +266,16 @@ class ControlView:
                     dpg.add_text("", tag="t_cam")
                     dpg.add_text("", tag="t_lead")
 
+            # speed cap slider (drag to set; no repeat-spam)
+            with dpg.group(horizontal=True):
+                dpg.add_text("SPEED CAP")
+                dpg.add_slider_int(
+                    tag="spd_slider", width=cw - 140, min_value=10,
+                    max_value=100, format="%d mph",
+                    default_value=int(round(app.cfg.max_speed_mps * 2.237)),
+                    callback=lambda s, v: setattr(
+                        app.cfg, "max_speed_mps", v / 2.237))
+
             # buttons
             with dpg.group(horizontal=True):
                 dpg.add_button(label="ENGAGE", width=150, height=40,
@@ -320,6 +331,10 @@ class ControlView:
                                 f"{app.hz:.0f} Hz work")
         dpg.set_value("t_speed", f"speed  {v*2.237:4.0f} mph   "
                                  f"cap {app.cfg.max_speed_mps*2.237:.0f}")
+        # keep the slider in sync when SPD keys/buttons move the cap
+        if not dpg.is_item_active("spd_slider"):
+            dpg.set_value("spd_slider",
+                          int(round(app.cfg.max_speed_mps * 2.237)))
         dpg.set_value("t_steer", f"steer  {app.last_steer:+.2f}   "
                                  f"wheel {tel.get('steering_deg', 0):+.0f}deg")
         des_lat = v * v * la.last_curvature
