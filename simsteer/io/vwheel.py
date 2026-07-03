@@ -5,23 +5,23 @@ inputmap automatically — steering, throttle and brake Just Bind on
 most installs; worst case the user does a one-time manual binding in
 Options > Controls with `--sweep` wiggling the axes.
 
-BeamNG reads this as a RAW joystick (its input screen shows generic
-xaxis/zaxis/rxaxis, not a named G29 inputmap), so the pedals are
-PLAIN and non-inverted — 0 at rest, max when pressed — instead of the
-real-hardware "rest = max, inputmap inverts it back" convention. With
-raw axes that convention read as full-throttle-at-rest. Bind in-game
-Options > Controls (steering = xaxis, throttle = zaxis, brake =
-rxaxis), no axis-invert needed.
+Axis assignment and polarity come from BeamNG's SHIPPED G29 inputmap
+(settings/inputmaps/c24f046d.json, read directly), not guesswork:
+    steering  <- xaxis   (angle 900)
+    accelerate <- yaxis  isInverted: true
+    brake     <- rzaxis  isInverted: true
+So throttle = ABS_Y, brake = ABS_RZ, and BOTH pedals are INVERTED:
+a real G29 rests its pedals at the raw MAX and presses toward 0, and
+the inputmap flips them back. We must match that — rest = max,
+pressed = 0 — or BeamNG inverts our rest(0) into FULL input, i.e.
+full throttle AND full brake at rest, and commanding brake reads as
+zero brake while throttle stays floored ("accelerates when braking").
 
-Axis assignment matches what BeamNG's binding screen actually reads
-off this device (verified in-game): steering = X, throttle = Y,
-brake = RZ ("R Z AXIS"). The earlier throttle-on-Z was dead because
-BeamNG binds throttle to the Y axis, which we were leaving at zero.
-
-    ABS_X   0..65535   steering, 32767 = center
-    ABS_Y   0..65535   throttle, 0 = released, 65535 = full  (BeamNG "Y")
-    ABS_RZ  0..65535   brake,    0 = released, 65535 = full  (BeamNG "R Z")
-    ABS_Z   0..65535   spare, always 0 (kept so SDL axis indices are stable)
+    ABS_X   0..65535   steering,  32767 = center
+    ABS_Y   0..65535   throttle,  65535 = released, 0 = full  (inverted)
+    ABS_RZ  0..65535   brake,     65535 = released, 0 = full  (inverted)
+    Z/RX/RY            spares, parked at released so their inputmap
+                       actions (if any) read as not-pressed
 
 Permissions: /dev/uinput must be writable. On this dev machine the
 seat ACL already grants it; elsewhere add the udev rule printed by
@@ -64,17 +64,18 @@ class VirtualWheel:
         # axes ABS_RZ fell into the "rx" slot (pos 4) and the brake
         # binding pointed at a slot we never drove. The RX/RY spares
         # push ABS_RZ to pos 6 = "rz" where the brake is bound.
+        # inverted pedals rest at MAX (see docstring / G29 inputmap)
         _p = dict(min=0, max=_PEDAL_MAX, fuzz=0, flat=0, resolution=0)
         caps = {
             e.EV_ABS: [
                 (e.ABS_X, AbsInfo(value=_STEER_MAX // 2, min=0,
                                   max=_STEER_MAX, fuzz=0, flat=0,
                                   resolution=0)),
-                (e.ABS_Y, AbsInfo(value=0, **_p)),    # pos 2 "y"  throttle
-                (e.ABS_Z, AbsInfo(value=0, **_p)),    # pos 3 "z"  spare
-                (e.ABS_RX, AbsInfo(value=0, **_p)),   # pos 4 "rx" spare
-                (e.ABS_RY, AbsInfo(value=0, **_p)),   # pos 5 "ry" spare
-                (e.ABS_RZ, AbsInfo(value=0, **_p)),   # pos 6 "rz" brake
+                (e.ABS_Y, AbsInfo(value=_PEDAL_MAX, **_p)),   # throttle (inv)
+                (e.ABS_Z, AbsInfo(value=_PEDAL_MAX, **_p)),   # spare
+                (e.ABS_RX, AbsInfo(value=_PEDAL_MAX, **_p)),  # spare
+                (e.ABS_RY, AbsInfo(value=_PEDAL_MAX, **_p)),  # spare
+                (e.ABS_RZ, AbsInfo(value=_PEDAL_MAX, **_p)),  # brake (inv)
             ],
             # a few bindable buttons (engage toggles etc. if ever wanted)
             e.EV_KEY: [e.BTN_TRIGGER, e.BTN_THUMB, e.BTN_TOP, e.BTN_TOP2],
@@ -95,9 +96,10 @@ class VirtualWheel:
         """steer -1..1 (right positive, matching the model/axis frame);
         throttle/brake 0..1, None = release that pedal."""
         s = int((max(-1.0, min(1.0, steer)) * 0.5 + 0.5) * _STEER_MAX)
-        # non-inverted: 0 at rest, max when pressed (see module docstring)
-        t = int(max(0.0, min(1.0, throttle or 0.0)) * _PEDAL_MAX)
-        b = int(max(0.0, min(1.0, brake or 0.0)) * _PEDAL_MAX)
+        # INVERTED to match the G29 inputmap (isInverted:true): rest =
+        # max, pressed = 0 (see module docstring)
+        t = int((1.0 - max(0.0, min(1.0, throttle or 0.0))) * _PEDAL_MAX)
+        b = int((1.0 - max(0.0, min(1.0, brake or 0.0))) * _PEDAL_MAX)
         if (s, t, b) == self._last:
             return
         self._last = (s, t, b)
