@@ -96,7 +96,7 @@ def test_curvature_clip():
     check("execution clamps disabled by default",
           cfg.lat_accel_max_mps2 <= 0)
     plan = mk(4.0, lambda t: 1.2).plan     # hard-turning plan
-    plan[:, 11] = [1.2 * t for t in
+    plan[:, 11] = [2.0 * t for t in
                    LongitudinalController(ControllerConfig())._T_IDXS]
     k_free = desired_curvature_lag_adjusted(
         plan, 4.0, 0.25, last_desired_curvature=0.30,
