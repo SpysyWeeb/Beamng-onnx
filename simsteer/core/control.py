@@ -301,6 +301,13 @@ class ControllerConfig:
     # defaults to 0.
     accel_fb_p: float = 0.0
     accel_fb_i: float = 0.4
+    # Integrate only near the setpoint (|v_target - v_ego| below this,
+    # m/s). The integrator exists to cancel steady cruise droop; during
+    # corner-scanner / turn-governor setpoint transients the tracking
+    # error is dynamics, not droop — integrating it wound the trim to
+    # its clip and bled out as ~3 mph overspeed past the cap (logged
+    # run_204218: fb rang between +1.2 and -0.7 through the twisties).
+    accel_fb_verr_gate: float = 1.5
     # field: mid-range shortfall needed MORE than 0.8 (fb pinned at
     # the clip with delivery still 0.68) — the table's engine promise
     # is that far off in high gears.
@@ -923,6 +930,7 @@ class LongitudinalController:
                      or self.last_brake >= 0.98)
         gate = (not aeb and not approaching_stop and v_ego > 2.0
                 and self._stop_brake == 0.0 and not pedal_sat
+                and abs(v_target - v_ego) < cfg.accel_fb_verr_gate
                 and len(self._a_hist) == self._a_hist.maxlen)
         if approaching_stop:
             self._a_fb_i *= math.exp(-dt / 0.5)
