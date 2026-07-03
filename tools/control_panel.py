@@ -1381,12 +1381,15 @@ def main() -> int:
                     f"loop {app.hz_ema:.0f} Hz < 20: model time-warped"
                     " - lower game graphics or use a smaller model", 6.0)
 
-            # UI at 10 Hz: rendering the window costs ~7 ms/frame that
-            # the model loop can't spare under big-model contention.
-            # Control/logging/charts data stay 20 Hz; only the pixels
-            # skip. Incident capture forces a draw for its snapshot.
+            # UI at the full 20 Hz (draw is ~4 ms — affordable on the
+            # small model). Auto-degrades to alternate-frame 10 Hz
+            # when the tick loses headroom (work-rate under 30 Hz
+            # means 33+ ms of work in the 50 ms budget — big-model
+            # contention). Incident capture always forces a draw.
             t_d = time.monotonic()
-            do_draw = bool(app.incident_note) or (app.frame_idx & 1) == 0
+            lite = bool(app.hz) and app.hz < 30.0
+            do_draw = (bool(app.incident_note) or not lite
+                       or (app.frame_idx & 1) == 0)
             if do_draw:
                 canvas[:CAM_VIEW_H] = cv2.resize(
                     draw_overlay(bgr, d, app.calib), (UI_W, CAM_VIEW_H),
