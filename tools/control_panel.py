@@ -1035,7 +1035,8 @@ class App:
                 "t,eng,mode,cal,v_ego,v_target,a_target,a_cmd,a_fb,"
                 "a_meas,thr,brk,steer,k_des,k_meas,lane_off,lead_x,"
                 "lead_p,pitch_applied,pitch_learned,"
-                "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim,roll\n")
+                "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim,roll,"
+                "plan_v0,pose_v\n")
             print(f"[panel] run log: {self.log_path}", flush=True)
         lead_p = (float(decoded.lead_prob[0])
                   if decoded.lead_prob.size else 0.0)
@@ -1057,7 +1058,12 @@ class App:
             f"{float(np.max(decoded.desire_state)):.2f},"
             f"{float(decoded.plan[-1, 3]):.2f},"
             f"{self.lat.axis_trim_state:+.4f},"
-            f"{tel.get('roll_glat', 0.0):+.2f}\n")
+            f"{tel.get('roll_glat', 0.0):+.2f},"
+            # speed-perception diagnostics: the model's OWN estimate of
+            # current speed (plan velocity at t=0, and posenet vx) vs
+            # the real v_ego. If these read low on clean highway, the
+            # model underperceives speed -> plans slow -> we brake.
+            f"{float(decoded.plan[0, 3]):.2f},{float(decoded.pose[0]):.2f}\n")
 
         # flight recorder trigger: engaged, moving, and the plan's
         # velocity target collapsed well below current speed with no
