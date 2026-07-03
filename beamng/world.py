@@ -51,15 +51,15 @@ CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 VEHICLE_SPECS = {
     "bastion": dict(cam_pos=CAM_POS, cam_height_m=CAM_HEIGHT_M,
                     wheelbase_m=2.9, part_config=None),
-    # MEASURED live (GE probe, 2026-07-03): the D-Series origin floats
-    # 0.284 m above the road (unlike the bastion's ground-level frame),
-    # and this 4x4 crew cab is ~10 cm taller than a real Sierra AT4 —
-    # its glass spans ~1.77-2.04 m above road, so the real user's
-    # 166 cm comma eye height lands at cowl level here. The camera is
-    # a sensor, not hardware: float it at the correct HEIGHT (the
-    # thing that shapes the model's view) just ahead of the cowl.
-    # frame z = 1.66 - 0.284; y = glass-base plane (-0.75) - 3 cm.
-    "pickup": dict(cam_pos=(0.0, -0.78, 1.376), cam_height_m=1.66,
+    # Comma-style mount on THIS truck's glass (user call 2026-07-03:
+    # BeamNG isn't 1:1 scale, so don't chase real-world centimetres —
+    # mount where the hardware would physically go). Windshield plane
+    # from pickup_glass.jbeam: at frame z=1.66 the glass is at
+    # y ~ -0.48; sit 3 cm outside it. MEASURED settled height above
+    # road = 1.95 m (D-Series origin floats 0.284 m; this 4x4 crew
+    # cab is ~10 cm taller than a real AT4). cam_height_m feeds the
+    # warp with the measured truth; LiveCalib refines online.
+    "pickup": dict(cam_pos=(0.0, -0.51, 1.66), cam_height_m=1.95,
                    wheelbase_m=3.5,
                    part_config="vehicles/pickup/"
                                "d15_crew_shortbed_4wd_A.pc"),
