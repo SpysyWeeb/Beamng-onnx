@@ -330,6 +330,12 @@ class ControllerConfig:
     # slowdowns stay gentle (rideable) while real stops still complete
     # gently; leads and AEB keep full braking authority. 0 disables.
     e2e_decel_soft_mps2: float = -2.5
+    # Sim-scale speed correction ceiling (exp mode). The model
+    # under-reads its own speed in BeamNG (~0.88 of real at cruise), so
+    # its plan velocity is scaled up by the live v_ego/pose_v ratio,
+    # clamped to [1.0, this]. 1.0 disables. 1.3 covers the measured
+    # ~1.14 with headroom without letting a bad pose reading bolt.
+    e2e_speed_scale_max: float = 1.3
     # Longitudinal jerk limits (m/s^3): rate-limit the accel command so
     # pedal transitions are deliberate, not stabs — this is what gives
     # openpilot its "weighted" long feel. Asymmetric: releasing toward
@@ -702,6 +708,7 @@ class LongitudinalController:
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
+        self._spd_scale = 1.0
         self._was_moving = False
         self._stop_brake = 0.0
         self._hold_t = 0.0
@@ -737,6 +744,7 @@ class LongitudinalController:
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
+        self._spd_scale = 1.0
         self._was_moving = False
         self._stop_brake = 0.0
         self._hold_t = 0.0
@@ -787,6 +795,26 @@ class LongitudinalController:
         else:
             v_target = float(np.interp(t, self._T_IDXS, v_plan))
             a_target = float(np.interp(t, self._T_IDXS, a_plan))
+            # Sim-scale speed correction. BeamNG isn't 1:1 scale, so the
+            # scene flows past ~10-13% slow and the model UNDER-reads its
+            # own speed (measured pose_v/v_ego ~0.88 at a steady 55 mph;
+            # real car = 1.001). The model's plan velocity lives in that
+            # under-read frame, so following it verbatim brakes the car
+            # to a phantom stop. Convert the plan to the real frame by
+            # the model's own live scale factor v_ego / pose_v — the
+            # model wants the same FRACTIONAL speed change, just in real
+            # units. Self-calibrating, smoothed, and bounded so a bad
+            # pose reading can't run the target away. pose = decoded
+            # velocity x; 0 disables.
+            pose_v = float(decoded.pose[0])
+            if (cfg.e2e_speed_scale_max > 1.0 and v_ego > 5.0
+                    and pose_v > 3.0):
+                raw = v_ego / pose_v
+                self._spd_scale += 0.05 * (raw - self._spd_scale)
+                s = float(np.clip(self._spd_scale, 1.0,
+                                  cfg.e2e_speed_scale_max))
+                v_target *= s
+                a_target *= s
 
         # Corner anticipation: find the tightest upcoming planned
         # curvature within `corner_scan_horizon_s` and override v_target
