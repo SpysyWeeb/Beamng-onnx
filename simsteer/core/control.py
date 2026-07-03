@@ -79,9 +79,6 @@ class ControllerConfig:
     # Lateral section; openpilot ships per-car constants, not online
     # estimation.
     lookahead_s: float = 0.3
-    # Used when SCS telemetry is unavailable (no plugin). Doesn't drive
-    # the truck, just keeps the curvature math sane.
-    default_speed: float = 22.0
     # Below this speed the curvature math blows up (k = yaw / v). Command
     # zero instead of garbage.
     min_speed: float = 1.0
@@ -198,14 +195,9 @@ class ControllerConfig:
     # controller to be mid-lane-change. Used to enable the steering
     # boost during the maneuver.
     lane_change_desire_threshold: float = 0.3
-    # How long to hold the desire pulse active after the user presses
-    # A/D. openpilot's DesireHelper holds the desire active across
-    # PRE_LANE_CHANGE + LANE_CHANGE_STARTING — a few seconds. A
-    # single-frame pulse gets washed out of our 5 s context buffer
-    # before the model commits. Default 2.5 s gives the model enough
-    # sustained input to see the maneuver through; bump to 4-5 s if
-    # lane changes still feel half-hearted.
-    lane_change_hold_s: float = 2.5
+    # (desire hold times live in the panel's DESIRE_HOLD_S — the old
+    # lane_change_hold_s config field was only read by the deleted
+    # Windows runtime.)
 
     # ----- LONGITUDINAL -----
     # Extra anticipation (seconds) on top of `lookahead_s` for the

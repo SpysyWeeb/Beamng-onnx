@@ -182,42 +182,8 @@ class SupercomboModel:
         )
 
 
-# ---- plan -> action (ported from openpilot drive_helpers, for M3) ----
-# This checkpoint has no direct `action` output (its last 2 floats are pad),
-# so like modeld's fallback branch we derive the commands from the plan.
-
-MIN_SPEED = 0.3
-MIN_STABLE_DELAY = 0.1
-
-
-def get_curvature_from_plan(plan: np.ndarray, t_idxs: np.ndarray,
-                            v_ego: float, action_t: float) -> float:
-    """Curvature to command now so heading matches the plan at t=action_t."""
-    yaws = plan[:, 11]        # euler yaw
-    yaw_rates = plan[:, 14]   # orientation_rate yaw
-    if action_t < MIN_STABLE_DELAY:
-        psi_target = (action_t / MIN_STABLE_DELAY) * np.interp(
-            MIN_STABLE_DELAY, t_idxs, yaws)
-    else:
-        psi_target = np.interp(action_t, t_idxs, yaws)
-    v = max(v_ego, MIN_SPEED)
-    curv_from_psi = psi_target / (v * action_t)
-    return float(2 * curv_from_psi - yaw_rates[0] / v)
-
-
-def get_accel_from_plan(plan: np.ndarray, t_idxs: np.ndarray,
-                        action_t: float,
-                        v_ego_stopping: float = 0.3) -> tuple[float, bool]:
-    """Acceleration to command now to hit the plan's speed at t=action_t.
-    Returns (accel, should_stop)."""
-    speeds = plan[:, 3]   # velocity x
-    accels = plan[:, 6]   # acceleration x
-    v_now, a_now = speeds[0], accels[0]
-    if action_t < MIN_STABLE_DELAY:
-        v_target = v_now + (action_t / MIN_STABLE_DELAY) * (
-            np.interp(MIN_STABLE_DELAY, t_idxs, speeds) - v_now)
-    else:
-        v_target = np.interp(action_t, t_idxs, speeds)
-    a_target = 2 * (v_target - v_now) / action_t - a_now
-    should_stop = bool(v_now < v_ego_stopping and a_target < 0.1)
-    return float(a_target), should_stop
+# The plan->action helpers that used to live here (ports of openpilot
+# drive_helpers get_curvature_from_plan / get_accel_from_plan) were
+# superseded by postprocess.desired_curvature_lag_adjusted and the
+# LongitudinalController's own plan interpolation; nothing imported
+# them (audit 2026-07-02).
