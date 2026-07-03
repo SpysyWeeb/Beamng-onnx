@@ -320,16 +320,16 @@ class ControllerConfig:
     # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
     accel_cmd_min_mps2: float = -3.5
-    # E2E decel envelope (exp mode). A real openpilot e2e model brakes
-    # GENTLY for its OWN plan — over a full real route (incl. real
-    # red-light stops) the model's desiredAcceleration bottomed at
-    # -2.2 m/s^2 and never went below -2.5 (connect route analysis
-    # 2026-07-03). CD210 has no smoothed action head, so its
-    # plan-derived accel can slam to the -3.5 ISO floor on phantom
-    # dips. Cap plan-driven decel to the real envelope so phantom
-    # slowdowns stay gentle (rideable) while real stops still complete
-    # gently; leads and AEB keep full braking authority. 0 disables.
-    e2e_decel_soft_mps2: float = -2.5
+    # E2E decel envelope (exp mode) — OFF by default (2026-07-03). It
+    # was added to soften phantom hard-stops, but those came from the
+    # speed under-read, which is now fixed at the source (the plan
+    # velocity is scaled to real speed), so the cap is redundant and
+    # muffles the model's genuine braking. Mechanism kept: set to a
+    # negative value (e.g. -2.5, the real model's measured floor) to
+    # re-enable if the model ever brakes too hard on open road. When
+    # active it floors plan-driven decel (no close lead, no AEB); leads
+    # and AEB always keep full braking authority. 0 disables.
+    e2e_decel_soft_mps2: float = 0.0
     # Sim-scale speed correction ceiling (exp mode). The model
     # under-reads its own speed in BeamNG (~0.88 of real at cruise), so
     # its plan velocity is scaled up by the live v_ego/pose_v ratio,
