@@ -5,13 +5,18 @@ inputmap automatically — steering, throttle and brake Just Bind on
 most installs; worst case the user does a one-time manual binding in
 Options > Controls with `--sweep` wiggling the axes.
 
-Axis conventions mirror the kernel hid-lg4ff driver so the ranges the
-game expects line up:
+BeamNG reads this as a RAW joystick (its input screen shows generic
+xaxis/zaxis/rxaxis, not a named G29 inputmap), so the pedals are
+PLAIN and non-inverted — 0 at rest, max when pressed — instead of the
+real-hardware "rest = max, inputmap inverts it back" convention. With
+raw axes that convention read as full-throttle-at-rest. Bind in-game
+Options > Controls (steering = xaxis, throttle = zaxis, brake =
+rxaxis), no axis-invert needed.
 
     ABS_X   0..65535   steering, 32767 = center
-    ABS_Z   0..255     throttle, 255 = RELEASED (inverted, like real hw)
-    ABS_RZ  0..255     brake,    255 = RELEASED
-    ABS_Y   0..255     clutch,   255 = RELEASED (never pressed by us)
+    ABS_Z   0..65535   throttle, 0 = released, 65535 = full
+    ABS_RZ  0..65535   brake,    0 = released, 65535 = full
+    ABS_Y   0..65535   clutch,   0 = released (never pressed by us)
 
 Permissions: /dev/uinput must be writable. On this dev machine the
 seat ACL already grants it; elsewhere add the udev rule printed by
@@ -40,7 +45,7 @@ could not create the uinput device: {err}
 then log out/in (or: sudo usermod -aG input $USER)."""
 
 _STEER_MAX = 65535
-_PEDAL_MAX = 255
+_PEDAL_MAX = 65535
 
 
 class VirtualWheel:
@@ -52,11 +57,11 @@ class VirtualWheel:
                 (e.ABS_X, AbsInfo(value=_STEER_MAX // 2, min=0,
                                   max=_STEER_MAX, fuzz=0, flat=0,
                                   resolution=0)),
-                (e.ABS_Y, AbsInfo(value=_PEDAL_MAX, min=0, max=_PEDAL_MAX,
+                (e.ABS_Y, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
                                   fuzz=0, flat=0, resolution=0)),
-                (e.ABS_Z, AbsInfo(value=_PEDAL_MAX, min=0, max=_PEDAL_MAX,
+                (e.ABS_Z, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
                                   fuzz=0, flat=0, resolution=0)),
-                (e.ABS_RZ, AbsInfo(value=_PEDAL_MAX, min=0, max=_PEDAL_MAX,
+                (e.ABS_RZ, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
                                    fuzz=0, flat=0, resolution=0)),
             ],
             # a few bindable buttons (engage toggles etc. if ever wanted)
@@ -78,8 +83,9 @@ class VirtualWheel:
         """steer -1..1 (right positive, matching the model/axis frame);
         throttle/brake 0..1, None = release that pedal."""
         s = int((max(-1.0, min(1.0, steer)) * 0.5 + 0.5) * _STEER_MAX)
-        t = int((1.0 - max(0.0, min(1.0, throttle or 0.0))) * _PEDAL_MAX)
-        b = int((1.0 - max(0.0, min(1.0, brake or 0.0))) * _PEDAL_MAX)
+        # non-inverted: 0 at rest, max when pressed (see module docstring)
+        t = int(max(0.0, min(1.0, throttle or 0.0)) * _PEDAL_MAX)
+        b = int(max(0.0, min(1.0, brake or 0.0)) * _PEDAL_MAX)
         if (s, t, b) == self._last:
             return
         self._last = (s, t, b)
