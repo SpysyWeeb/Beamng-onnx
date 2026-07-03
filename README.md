@@ -1,79 +1,46 @@
 # Beamng-onnx
 
-Drive **BeamNG.tech** with comma.ai's openpilot driving models — no
-openpilot install, just the ONNX files and onnxruntime.
+Drive **BeamNG** with comma.ai's openpilot driving models — no
+openpilot install, just the ONNX files and onnxruntime. The model
+steers and works the pedals end-to-end; you watch it drive.
 
-This is a Linux-only fork of [140er/simsteer](https://github.com/140er/simsteer)
+A Linux-only fork of [140er/simsteer](https://github.com/140er/simsteer)
 rebuilt around BeamNG. Upstream drives ETS2 / Forza / Assetto Corsa on
-Windows by capturing the game window and steering through a virtual
-gamepad; this fork keeps simsteer's model core (warp, preprocessing,
-decode, learners) and replaces all of the I/O:
+Windows; this fork keeps simsteer's model core (warp, preprocessing,
+decode, learners) and replaces all of the I/O. There are **two ways to
+feed and drive the game:**
 
-| | upstream simsteer (Windows) | this fork (Linux + BeamNG) |
+| | **tech mode** (BeamNG.tech license) | **screen mode** (any BeamNG) |
 |---|---|---|
-| Frames | dxcam/mss screen capture | beamngpy `Camera` sensor, shared-memory streaming |
-| Telemetry | per-game plugins | beamngpy `Electrics` |
-| Control | ViGEm / vJoy virtual devices | `vehicle.control()` |
-| Inference | onnxruntime DirectML | onnxruntime **ROCm** (AMD GPU), CPU fallback |
+| Frames | beamngpy `Camera` sensor, shared-memory stream | capture the game window (hood cam) |
+| Telemetry | beamngpy `Electrics` (real speed) | none — model's own visual speed estimate |
+| Control | direct `input.event` steering + pedals | a virtual Logitech G29 (uinput) |
+| Map / vehicle | chosen for you, scripted or freeroam | you pick them in-game |
 
-The camera sensor renders the model's windshield view independently of
-what's on screen — you can film the AI car from any angle (free cam,
-chase cam) while it drives, or drive a second vehicle around it.
+Tech mode is the high-fidelity path (the `Camera` sensor renders the
+model's windshield view independently of what's on screen, so you can
+film the AI car from any angle while it drives). Screen mode needs no
+license — it captures whatever's on your monitor and drives a virtual
+wheel — at the cost of a noisier, telemetry-free signal.
+
+Inference runs on onnxruntime **ROCm** (AMD GPU) with CPU fallback.
 
 ## Status
 
-- **M1 — model sees BeamNG** ✅ lane probs peak ~1.0 while driving,
-  plan reach 100–240 m, verified warp geometry (comma-style windshield
-  mount, FOV checked against horizon + model lane widths)
-- **Live viewer** ✅ `tools/live_view.py` — simsteer's overlay (plan,
-  lane lines, road edges) on the live camera at 20 Hz
-- **GPU inference** ✅ ROCm on RDNA4 (gfx1201): full pipeline
-  7.5 ms/step (133 Hz capable)
-- **Supercombo** ✅ runs openpilot master's re-unified
-  `driving_supercombo.onnx` (2026) with `--supercombo`
+- **M1 — model sees BeamNG** ✅ verified warp geometry (vx ratio 0.995,
+  yaw 1.028, lane width 3.82 m); lane probs peak ~1.0 driving.
 - **M2 — solid 20 Hz loop** ✅ shared-memory frame streaming
-  (0.13 ms/frame vs 12 ms polled)
-- **M3 — closed loop** ⏳ next: model curvature + plan accel →
-  `vehicle.control()` (lateral + end-to-end longitudinal)
-- **M4 — scenarios** ⏳ lead-car cut-in tests with a player-driven
-  second vehicle, construction-site props, filming runs
-
-## Requirements
-
-- **BeamNG.tech** (research license — the `Camera` sensor needs it),
-  launched with the tech server: `bash launch_beamng.sh`
-- Any Linux distro — **no container required**. Python 3.12 venv:
-
-  ```bash
-  uv venv .venv --python 3.12        # or python3 -m venv .venv
-  uv pip install -r requirements.txt
-  ```
-
-  CPU inference runs the full pipeline at ~60 Hz, 3× the 20 Hz it
-  needs — the GPU section below is optional.
-
-  (This repo is developed on Bazzite with the Python env in a
-  distrobox, purely because that's an easy place to put the ROCm
-  libraries on an immutable OS. Dev-machine detail, not a dependency.)
-
-### Models (not in the repo)
-
-Put the ONNX files in `models/`:
-
-- **Split pair** (openpilot 0.11.1): `driving_vision.onnx` +
-  `driving_policy.onnx` — copy from an openpilot checkout at a 0.11.x
-  tag (`selfdrive/modeld/models/`, git-lfs).
-- **Supercombo** (openpilot master, 2026): `driving_supercombo.onnx` —
-  same path on current master. Output layout is read from the file's
-  own metadata, so checkpoint swaps don't need code changes.
-
-### ROCm (optional, AMD GPUs)
-
-`onnxruntime-rocm` from PyPI plus the ROCm 6.4 runtime libs
-(`hipblas rocblas miopen-hip hip-runtime-amd hipfft hipsparse hiprand
-rocrand rccl roctracer hipsolver rocsolver rocfft` from
-repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
-&& ldconfig`. Falls back to CPU automatically (~60 Hz there, still fine).
+  (0.13 ms/frame); GPU pipeline ~6 ms/step on RDNA4 (gfx1201).
+- **M3 — closed loop** ✅ lateral + end-to-end longitudinal, extensively
+  tuned against real openpilot behavior (see *The control stack* and
+  *What we learned*).
+- **Screen mode** ✅ no-tech.key path: window capture + virtual G29,
+  runs the full pipeline at 20 Hz with zero beamngpy.
+- **UI** ✅ start panel and control panel rebuilt in dearpygui (crisp
+  fonts, live camera texture, real plots, op-replay-clipper telemetry
+  gauge).
+- **M4 — scenarios** ⏳ traffic spawning works (start-panel slider);
+  next: player-driven lead cut-ins, construction props, filming runs.
 
 ## Running
 
@@ -83,47 +50,195 @@ repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
 ./start.sh          # (or: python tools/start_panel.py)
 ```
 
-It auto-detects your BeamNG install and tech.key, lets you pick a map
-and vehicle, launches the game with the tech server if it isn't up,
-and starts the control panel. `west_coast_usa` uses our scripted
-scenario with the calibrated spawn; any other map runs through
-*freeroam interception* — load the map in-game, enter a car, press
-START and the model hooks that car. Without a BeamNG.tech `tech.key`
-the planned player-view + virtual-gamepad mode isn't built yet, so a
-tech license (free for personal use from BeamNG) is currently
-required.
+It auto-detects your BeamNG install and tech.key and reshapes itself:
+
+- **tech.key present** → pick map, vehicle, and traffic. It launches
+  the game with the tech server, waits for a real beamngpy handshake
+  (not just the open port), then starts the control panel.
+  `west_coast_usa` runs the scripted scenario at the calibrated spawn;
+  any other map uses *freeroam interception* — load it in-game, enter a
+  car, press START and the model hooks that car.
+- **no tech.key** → screen mode. The map/vehicle options disappear
+  (you set those in-game); you set the hood-cam FOV. Have BeamNG open
+  with a car in **hood camera** view, press START, and the model
+  captures the window and drives a virtual wheel.
+
+Both spawns are detached, so closing the launcher (it auto-closes ~3 s
+after START) never takes down the game or panel. The control panel logs
+to `debug_out/control_panel_last.log`.
+
+**Screen-mode wheel binding (one-time):** BeamNG applies its shipped
+G29 inputmap automatically (steering = X axis, throttle = Y, brake =
+RZ, both pedals inverted — the virtual wheel matches). If a pedal
+doesn't respond, run `python -m simsteer.io.vwheel --sweep` and bind it
+in Options → Controls.
 
 **Manual pieces:**
 
 ```bash
-bash launch_beamng.sh                     # host: BeamNG.tech + tech server
+bash launch_beamng.sh                       # host: BeamNG + tech server
 
-# in the Python env:
-python tools/control_panel.py             # the main app (viewer+telemetry)
-python tools/control_panel.py --attach    # hook the car already in-game
-python tools/live_view.py --supercombo    # live overlay viewer; drive manually
-python tools/live_view.py --ai            # let BeamNG's AI drive (split model)
-python tools/m1_beamng_frame.py --supercombo --ai --seconds 20   # scored probe
-python tools/camera_probe.py              # camera-mount/FOV verification shots
+python tools/control_panel.py               # tech mode, scripted west_coast_usa
+python tools/control_panel.py --attach      # hook the car already in-game
+python tools/control_panel.py --screen --fov 100     # screen mode (no beamngpy)
+python tools/control_panel.py --model models/big_driving_supercombo.onnx
+python tools/control_panel.py --split --vision <v.onnx> --policy <p.onnx>
+python tools/control_panel.py --classic     # legacy hand-drawn cv2 UI
+python tools/live_view.py --supercombo      # overlay viewer; drive manually
 ```
 
-`beamng/world.py` holds the scenario/vehicle/camera constants (mount
-position, FOV, `lateral_sign=+1` — BeamNG renders unmirrored, unlike
-upstream's screen-capture games).
+**Controls** (panel buttons or keys): `e` engage · `l` long-mode cycle
+(EXP / CHILL / OFF) · `a`/`d` lane-change L/R · `z`/`c` turn L/R ·
+`r` CAL · `v` camera-calib A/B · speed-cap slider or `-`/`=`.
 
-### In-game control panel (mod)
+## Requirements
 
-`beamng_mod/` ships a tiny GE-Lua mod that draws an imgui window inside
-BeamNG with ENGAGE / lane-change / turn / LONG / CAL buttons, relayed
-over localhost UDP to `tools/control_panel.py` (which sends live status
-back). Install once, then restart the game:
+Any Linux distro. Python 3.12 venv:
 
 ```bash
-bash beamng_mod/install.sh    # copies into the userfolder's mods/unpacked/
+uv venv .venv --python 3.12        # or python3 -m venv .venv
+uv pip install -r requirements.txt
 ```
 
-The control panel auto-loads the extension on startup; clicks work from
-either the in-game window or the panel window.
+CPU inference runs the full pipeline at ~60 Hz — the ROCm section is
+optional. Screen mode additionally needs `evdev`, `mss`, `python-xlib`
+(virtual wheel + window capture); the dearpygui UIs need `dearpygui`.
+
+(Developed on Bazzite with the Python env in a distrobox, purely
+because that's an easy place to put the ROCm libraries on an immutable
+OS — a dev-machine detail, not a dependency. The game runs on the host;
+only the control panel runs in the container.)
+
+### Models (not in the repo)
+
+Put the ONNX files in `models/`. Supercombo files may carry a release
+suffix (e.g. `driving_supercombo_CD210.onnx`) — the default resolver
+globs `driving_supercombo*.onnx`. The start panel toggles between a
+single **supercombo** and a **split vision + policy** pair, and can
+browse to any `.onnx`. Output layout is read from each file's own
+metadata, so checkpoint swaps need no code changes.
+
+- **Supercombo** (openpilot master): one `driving_supercombo*.onnx`.
+- **Split pair** (openpilot 0.11.x): `driving_vision*.onnx` +
+  `driving_policy*.onnx`.
+- **Big model** (`big_driving_supercombo.onnx`, comma's USB-eGPU
+  model, 1.76 GB): supported, and it's the only one with a real
+  **action head** (a trained, smoothed accel/curvature output). It
+  needs the game's graphics turned down enough to hold 20 Hz —
+  otherwise its temporal buffers time-warp.
+
+comma's LFS lives on GitLab (`gitlab.com/commaai/openpilot-lfs`), not
+GitHub — pull pointers from `raw.githubusercontent`, then the GitLab
+LFS `objects/batch` API.
+
+### ROCm (optional, AMD GPUs)
+
+`onnxruntime-rocm` from PyPI plus the ROCm 6.4 runtime libs
+(`hipblas rocblas miopen-hip hip-runtime-amd hipfft hipsparse hiprand
+rocrand rccl roctracer hipsolver rocsolver rocfft` from
+repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
+&& ldconfig`. Falls back to CPU automatically.
+
+## The control stack
+
+The model outputs a plan (trajectory + velocity/accel) and perception
+(lane lines, road edges, leads). `simsteer/core/control.py` turns that
+into steering and pedal commands, tuned to match how real openpilot
+behaves.
+
+**Lateral** — feed-forward from the plan's desired curvature through a
+measured rack model, then executed at ~100 Hz:
+
+- Rack fit (`axis = a·wheel`) is a **measured constant** from the CAL
+  routine (a scripted steering system-ID), not an online learner — the
+  sole exception is screen mode, which has no CAL and learns it live.
+- **Understeer feed-forward**: the wheel target scales `(1 + kv·v²)`
+  because tire slip grows with speed; fit from logged in-curve delivery
+  (0.96 at city speed → 0.74 at highway).
+- **100 Hz steering executor**: the model plans at 20 Hz but a separate
+  thread actuates the wheel at ~100 Hz (openpilot's modeld/controlsd
+  split), smoothing between plan updates instead of staircasing.
+- **Rate limiter only** — the ISO curvature/lat-accel *magnitude*
+  clamps are off by default (the sim's tires are the real limit); the
+  ISO-jerk rate limiter (with faster unwind) shapes how fast the wheel
+  turns. Corner *entry speed* is governed separately.
+- Turn governor slows to a walking pace at intersections (from the
+  plan's accumulated heading or a TURN command), since without
+  navigation the model commits to a turn late.
+
+**Longitudinal** — follow the plan's velocity/accel through measured
+pedal maps, with corrections that mirror the real model's envelope:
+
+- Pedal maps are measured interpolation tables (throttle/brake vs
+  commanded accel), since sim pedal response saturates and isn't affine.
+- **Sim-scale speed correction** (the big one — see below): the plan
+  velocity is scaled by the model's live `v_ego / pose_v` because the
+  model under-reads its speed in BeamNG.
+- **E2E decel envelope**: on open road (no lead/AEB) commanded decel is
+  floored at −2.5 m/s², the real model's measured minimum — phantom
+  slowdowns stay gentle; leads and AEB keep full braking.
+- Integral speed-trim, gated to steady cruise; stopping logic with a
+  creep probe to break stop-hold deadlocks.
+
+**Best-effort principle:** like real openpilot, the controller does not
+intervene on low vision confidence — it drives on whatever the model
+outputs and the driver (you) is the fallback. There is no "lost-road"
+safety stop.
+
+## What we learned
+
+The interesting findings, most impactful first — most were nailed by
+decoding real comma **connect** route logs and comparing them to sim
+runs frame-by-frame.
+
+- **Traffic convention was inverted.** The model was being told it
+  drove on the *left* (UK). On US maps that reads as "permanently in
+  the oncoming lane" → left-lane bias, defensive phantom stops, launch
+  hesitance. One-hot fix (`tc[int(is_rhd)]=1`, so US = `(1,0)`) turned
+  20 mph timid crawling into 54 mph steady cruise. This was the single
+  biggest behavior fix.
+- **The model under-reads its own speed by ~10-13%.** BeamNG isn't 1:1
+  scale, so the scene flows past ~10% slow; a model trained on real
+  roads reads a true 55 mph as ~48 (measured live: `pose_v/v_ego`
+  ≈ 0.88; real car = 1.001). The model has no speed input, so in e2e it
+  plans at its perceived-low speed and the controller brakes to a
+  phantom stop — and it's exactly why e2e never reached speed while
+  chill mode did. Fixed by scaling the plan velocity by the model's own
+  live `v_ego/pose_v`.
+- **"Confidence" doesn't gate stopping.** `modelV2.confidence` is a
+  RED/YELLOW/GREEN disengage-alert enum; on a smooth real drive it read
+  "red" 95% of the time while never stopping, and lane confidence
+  dropped to ~0 without stopping either. What keeps the real model
+  smooth is a perfect speed estimate and a plan that never dips — not a
+  confidence signal.
+- **Camera resolution drives low-speed vision.** Bumping the render
+  1664×832 → 2496×1248 (supersampling the model's warp like a real
+  camera) raised lane confidence at 1-3 m/s from 0.26 to 0.75 and
+  killed the "won't-commit crawl."
+- **Steering timing, measured not guessed.** Command→response lag is
+  ~0.30-0.35 s (cross-correlated from logs); the lead is matched to it,
+  plus a small deliberate turn-in-early bias, which cured the "hugs the
+  outside of curves then gets thrown across the lane" complaint.
+- **The big model has an action head; CD210 doesn't.** The real car's
+  smoothness partly comes from a trained, gently-bounded acceleration
+  output. CD210's action slot is padding, so we derive accel from the
+  plan (choppier) — which is why the decel envelope cap helps.
+- **Gore points confuse E2E without navigation.** At road forks the
+  model doesn't commit to a branch and drifts toward the dirt divider,
+  then correctly slows because its path leaves the pavement. Real
+  openpilot solves this with nav input (a bigger project); we mitigate
+  by preferring continuous-highway routes.
+
+## Vehicles
+
+`beamng/world.py` (`VEHICLE_SPECS`) holds per-vehicle camera mount,
+height, wheelbase, and part config, plus per-vehicle state files so one
+vehicle's calibration never bleeds into another's.
+
+- **bastion** — the measured-and-tuned sedan (camera ~1.30 m).
+- **pickup** — Gavril D-Series crew-cab 4×4 automatic, a 2020 Sierra
+  1500 AT4 recreation. Camera at the windshield glass, measured 1.95 m
+  above the road.
 
 ## Upstream docs
 
