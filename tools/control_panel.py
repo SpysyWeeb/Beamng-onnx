@@ -711,9 +711,12 @@ class App:
         # Execute the plan at an openpilot-like horizon. The old 1.0 s
         # anticipation applied the deceleration planned for 1.3 s in
         # the future NOW — the whole stop profile ran early and the car
-        # halted metres before the line. Corner braking keeps its own
-        # 6 s scan horizon; this only times plan-following.
-        self.cfg.long_anticipation_s = 0.5
+        # halted metres before the line; 0.5 still landed red-light
+        # stops early (lane confidence fades at crawl speed, so the
+        # model's re-planning can't claw the shift back). Corner
+        # braking keeps its own 6 s scan horizon; this only times
+        # plan-following.
+        self.cfg.long_anticipation_s = 0.3
         self.cfg.save(game="beamng")
 
         self.set_banner(f"CAL done: a={a:+.2f} ({n} samples, frozen)  "

@@ -211,8 +211,9 @@ class ControllerConfig:
     # on speed than steering does on heading — we have to see the bend
     # coming before we're in it. Effective long-action-time =
     # lookahead_s + long_anticipation_s. lookahead_s is the static
-    # steerActuatorDelay tunable from the tuner.
-    long_anticipation_s: float = 0.5
+    # steerActuatorDelay tunable from the tuner. Keep this lean: every
+    # 0.1 s here lands planned stops ~1-2 m earlier at city speeds.
+    long_anticipation_s: float = 0.3
     # m/s^2 of *commanded* acceleration that maps to a full-pressed
     # throttle (axis=1.0). This is a PEDAL SCALE, not a limit — it
     # should reflect what the vehicle actually does at full pedal, or
