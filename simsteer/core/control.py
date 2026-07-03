@@ -141,9 +141,11 @@ class ControllerConfig:
     # (openpilot leans on it: modeld's LAT_SMOOTH_SECONDS is 0 because
     # the EPS does the smoothing); our FILTER_DIRECT input has none, so
     # the plan's frame-to-frame flicker reaches the wheel raw and the
-    # model watches its own twitch through the camera. tau 0.1 s ~
-    # t90 0.23 s, comparable to a quick EPS. 0 disables.
-    steer_smooth_s: float = 0.1
+    # model watches its own twitch through the camera. Applied by the
+    # panel's ~100 Hz ControlSender (not the 20 Hz controller), so the
+    # constant can be a quick-EPS 0.05 without staircase artifacts.
+    # 0 disables.
+    steer_smooth_s: float = 0.05
 
     # Speed-dependent steering response (variable-ratio rack in ETS2
     # and most games) is handled inside LiveParams now — it fits a
@@ -617,16 +619,13 @@ class LateralController:
         # the dynamic auto-knob. Both stack additively on top of FF.
         axis = axis_ff + self.axis_trim_state + cfg.axis_bias
         axis = max(-cfg.steer_max, min(cfg.steer_max, axis))
-        self.last_axis_target = axis   # pre-EPS-filter (telemetry TGT %)
-        # Emulated EPS: first-order low-pass on the final axis. The
-        # direct game input has no actuator dynamics, so without this
-        # every 20 Hz plan flicker reaches the wheel raw.
-        if cfg.steer_smooth_s > 0:
-            alpha = 1.0 - math.exp(-dt / cfg.steer_smooth_s)
-            self._axis_smooth += alpha * (axis - self._axis_smooth)
-            axis = self._axis_smooth
-        else:
-            self._axis_smooth = axis
+        self.last_axis_target = axis   # rate-limited target (telemetry TGT %)
+        # The emulated-EPS low-pass now runs in the panel's
+        # ControlSender at ~100 Hz (openpilot's 20 Hz plan / 100 Hz
+        # actuation split). Applying it here at 20 Hz staircased the
+        # wheel in 50 ms holds and stacked a full tick of lag on top
+        # of the filter's own — a measured 0.25-0.35 s command-to-
+        # response delay that read as "sway" in the lane.
         self.last_axis = axis
         return axis
 

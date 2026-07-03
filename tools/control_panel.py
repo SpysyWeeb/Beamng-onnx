@@ -165,15 +165,24 @@ MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
 
 
 class ControlSender(threading.Thread):
-    """Fire-and-forget vehicle control: world.apply() is a synchronous
-    TCP round-trip (~8 ms measured, worse under game load) — off the
-    20 Hz loop it goes. Mailbox semantics: only the LATEST command is
-    sent; if the game stalls we skip stale intermediates rather than
-    queue them (world._ctl_lock already serializes vs telemetry)."""
+    """~100 Hz steering executor (openpilot's split: modeld plans at
+    20 Hz, controlsd actuates at 100). The main loop submits the
+    rate-limited steering TARGET at 20 Hz; this thread continuously
+    first-order-smooths the applied axis toward it (the emulated-EPS
+    filter used to run inside the 20 Hz loop, which staircased the
+    wheel in 50 ms holds and stacked a full tick of lag on top of the
+    filter's own). world.apply() is a ~8 ms TCP round-trip, so the
+    real rate self-paces to whatever the vehicle socket sustains.
 
-    def __init__(self, world: BeamNGOnnxWorld):
+    Goes idle 0.25 s after the last submit — manual driving, CAL's
+    direct applies, and the disengaged state are never fought."""
+
+    def __init__(self, world: BeamNGOnnxWorld, steer_tau: float = 0.05):
         super().__init__(daemon=True, name="ctl-sender")
         self.world = world
+        self.steer_tau = steer_tau
+        self._steer_now = 0.0
+        self._last_submit = 0.0
         self._latest: tuple | None = None
         self._ev = threading.Event()
         self._stop = threading.Event()
@@ -181,20 +190,37 @@ class ControlSender(threading.Thread):
     def submit(self, steer: float, thr: float | None,
                brk: float | None) -> None:
         self._latest = (steer, thr, brk)
+        self._last_submit = time.monotonic()
         self._ev.set()
 
     def run(self) -> None:
+        last_t = time.monotonic()
         while not self._stop.is_set():
-            if not self._ev.wait(timeout=0.5):
-                continue
-            self._ev.clear()
             cmd = self._latest
-            if cmd is None:
+            now = time.monotonic()
+            if cmd is None or now - self._last_submit > 0.25:
+                self._latest = None
+                if self._ev.wait(timeout=0.5):
+                    self._ev.clear()
+                    # wake from idle: snap to the fresh target so the
+                    # wheel doesn't sweep in from a stale value
+                    if self._latest is not None:
+                        self._steer_now = self._latest[0]
+                    last_t = time.monotonic()
                 continue
+            dt = min(now - last_t, 0.05)
+            last_t = now
+            target, thr, brk = cmd
+            if self.steer_tau > 1e-4:
+                alpha = 1.0 - math.exp(-dt / self.steer_tau)
+                self._steer_now += alpha * (target - self._steer_now)
+            else:
+                self._steer_now = target
             try:
-                self.world.apply(*cmd)
+                self.world.apply(self._steer_now, thr, brk)
             except Exception:
                 pass
+            time.sleep(max(0.0, 0.01 - (time.monotonic() - now)))
 
     def stop(self) -> None:
         self._stop.set()
@@ -362,7 +388,8 @@ class App:
         self.queue = FrameQueue()
         self.tel = Telemetry(self.world)
         self.tel.start()
-        self.sender = ControlSender(self.world)
+        self.sender = ControlSender(self.world,
+                                    steer_tau=self.cfg.steer_smooth_s)
         self.sender.start()
 
         # In-game imgui panel (beamng_mod/): load the extension if the
@@ -654,8 +681,12 @@ class App:
                 c = float(np.mean((a_s - a_s.mean()) * (w_s - w_s.mean())) / sd)
                 if c > best_c:
                     best_c, lag_s = c, k * 0.05
+        # Lead the plan by the measured command->response delay:
+        # k_des->k_meas cross-correlation on logged turn segments reads
+        # 0.25-0.35 s (rate limiter + EPS tau + vehicle yaw response).
+        # 0.20 covers the vehicle side; the EPS constant rides on top.
         self.cfg.lookahead_s = float(np.clip(
-            0.10 + self.cfg.steer_smooth_s, 0.10, 0.40))
+            0.20 + self.cfg.steer_smooth_s, 0.10, 0.40))
 
         # Pedal-map fit: achieved accel vs pedal position, slope with
         # intercept (the intercept absorbs drag/rolling resistance —
