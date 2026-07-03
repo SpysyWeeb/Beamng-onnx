@@ -265,6 +265,22 @@ class ControllerConfig:
     stop_hold_speed: float = 1.5
     stop_hold_brake: float = 0.3
     stop_brake_ramp_s: float = 1.0
+    # Creep probe — the deadlock breaker (caught live 2026-07-02: the
+    # hold waits for the plan to want motion, but from a stopped scene
+    # this model often needs to SEE motion before it re-plans any).
+    # After creep_probe_after_s held at a plan-zero standstill with no
+    # lead, release the brake for creep_probe_len_s so the automatic's
+    # creep advances the scene — the sim analog of an openpilot driver
+    # tapping the gas to resume. Capped at creep_probe_max probes per
+    # stop so a genuine red light gets an inch-forward or two, not a
+    # slow crawl into the intersection.
+    creep_probe_after_s: float = 8.0
+    # Probe ends when the car has ROLLED this far (a real scene
+    # change for the model), or at the timeout — a fixed short
+    # release barely moved the car through the drivetrain lag.
+    creep_probe_dist_m: float = 0.6
+    creep_probe_len_s: float = 3.0
+    creep_probe_max: int = 2
     # Closed loop on MEASURED acceleration — openpilot's actual long
     # mechanism (controlsd runs a PID on a_target vs a_ego; it doesn't
     # "learn" gains, feedback adapts to the vehicle in real time).
@@ -620,6 +636,10 @@ class LongitudinalController:
         self._v_err_i = 0.0
         self._was_moving = False
         self._stop_brake = 0.0
+        self._hold_t = 0.0
+        self._probe_t = 0.0
+        self._probe_dist = 0.0
+        self._probe_count = 0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -651,6 +671,10 @@ class LongitudinalController:
         self._v_err_i = 0.0
         self._was_moving = False
         self._stop_brake = 0.0
+        self._hold_t = 0.0
+        self._probe_t = 0.0
+        self._probe_dist = 0.0
+        self._probe_count = 0
         # accel-feedback state: measured accel LPF, previous v, and a
         # short history of commanded accel (setpoint ~0.3 s ago)
         self._v_prev: float | None = None
@@ -903,7 +927,22 @@ class LongitudinalController:
                         and a_cmd < 0.2 and v_target < 1.0)
             if not stopping:
                 self._stop_brake = 0.0
-            if stopping:
+                self._hold_t = 0.0
+                self._probe_t = 0.0
+                self._probe_count = 0
+            if stopping and self._probe_t > 0:
+                # CREEP PROBE: brake released, the automatic's creep
+                # rolls the car so the model sees motion and can
+                # re-plan (it stays 'stopping' until the plan asks
+                # for real speed, which exits this state entirely).
+                self._probe_t -= dt
+                self._probe_dist += v_ego * dt
+                throttle, brake = 0.0, 0.0
+                if (self._probe_t <= 0
+                        or self._probe_dist >= cfg.creep_probe_dist_m):
+                    self._probe_t = 0.0
+                    self._hold_t = 0.0     # re-hold, wait again
+            elif stopping:
                 # Came to a stop while driving: ramp the brake up and
                 # hold against automatic creep (openpilot LongControl
                 # 'stopping' ramps to stopAccel the same way). Releases
@@ -917,6 +956,14 @@ class LongitudinalController:
                 self._stop_brake = min(cfg.stop_hold_brake,
                                        self._stop_brake + ramp)
                 throttle, brake = 0.0, self._stop_brake
+                self._hold_t += dt
+                if (self._hold_t > cfg.creep_probe_after_s
+                        and self._probe_count < cfg.creep_probe_max
+                        and lead_x > 60.0 and not aeb):
+                    self._probe_t = cfg.creep_probe_len_s
+                    self._probe_dist = 0.0
+                    self._probe_count += 1
+                    self._stop_brake = 0.0
             elif a_cmd + drag_eff >= 0.0:
                 # Gear-dependent engine delivery: scale the DEMAND fed
                 # to the table by the measured per-speed correction
