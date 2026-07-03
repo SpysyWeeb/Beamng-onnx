@@ -1069,12 +1069,18 @@ def draw_charts(canvas: np.ndarray, app: App) -> None:
                 prev = pt
         wv = want[~np.isnan(want)]
         dv = does[~np.isnan(does)]
-        txt = (f"{label}  want "
-               + (f"{wv[-1]:+.1f}" if wv.size else "--")
-               + f"  act " + (f"{dv[-1]:+.1f}" if dv.size else "--"))
-        cv2.putText(canvas, txt, (x1 + 6, y0 + H - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 170, 255), 1,
-                    cv2.LINE_AA)
+        # label in the series colors: want = orange, act = green
+        fnt, sc = cv2.FONT_HERSHEY_SIMPLEX, 0.42
+        parts = ((f"{label}  ", (200, 200, 200)),
+                 ("want " + (f"{wv[-1]:+.1f}" if wv.size else "--"),
+                  (0, 170, 255)),
+                 ("  act " + (f"{dv[-1]:+.1f}" if dv.size else "--"),
+                  (90, 220, 120)))
+        tx = x1 + 6
+        for s, col in parts:
+            cv2.putText(canvas, s, (tx, y0 + H - 6), fnt, sc, col, 1,
+                        cv2.LINE_AA)
+            tx += cv2.getTextSize(s, fnt, sc, 1)[0][0]
 
 
 def _build_wheel_icon(size: int = 186) -> np.ndarray:
