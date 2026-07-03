@@ -81,14 +81,16 @@ class DrivingModel:
 
     def step(self, img: np.ndarray, big_img: np.ndarray | None = None,
              desire: np.ndarray | None = None,
-             traffic_convention: tuple[float, float] = (0.0, 1.0),
+             traffic_convention: tuple[float, float] = (1.0, 0.0),
              ) -> tuple[np.ndarray, np.ndarray]:
         # traffic_convention: openpilot's modeld sets index `int(is_rhd)`
-        # to 1.0. So:
-        #   (0, 1)  =  is_rhd False  =  drive on the RIGHT  (US, EU, AC stock tracks)
-        #   (1, 0)  =  is_rhd True   =  drive on the LEFT   (UK, Japan, AU)
-        # We had (1, 0) hardcoded — telling the model "we drive on the
-        # left" which biases its lane targeting. Default flipped to (0, 1).
+        # to 1.0 (is_rhd = driver sits on the right = left-side traffic).
+        #   is_rhd False -> index 0 -> (1, 0) = RIGHT-side traffic (US, EU)
+        #   is_rhd True  -> index 1 -> (0, 1) = LEFT-side traffic  (UK, JP, AU)
+        # An earlier comment here had this table inverted, and the (0, 1)
+        # default it justified told the model we drive on the LEFT — on US
+        # maps that read as "permanently in the oncoming lane": left lane
+        # bias, defensive phantom stops, launch hesitance.
         """Run one inference step. Returns (vision_out_flat, policy_out_flat)
         as float32 numpy arrays of shapes (1576,) and (1000,)."""
         if big_img is None:

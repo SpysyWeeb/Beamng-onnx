@@ -100,9 +100,13 @@ class SupercomboModel:
 
     def step(self, img: np.ndarray, big_img: np.ndarray | None = None,
              desire: np.ndarray | None = None,
-             traffic_convention: tuple[float, float] = (0.0, 1.0),
+             traffic_convention: tuple[float, float] = (1.0, 0.0),
              ) -> np.ndarray:
-        """Run one 20 Hz step. Returns the flat (2576,) float32 output."""
+        """Run one 20 Hz step. Returns the flat (2576,) float32 output.
+
+        traffic_convention follows modeld's `tc[int(is_rhd)] = 1`:
+        (1, 0) = right-side traffic (US/EU), (0, 1) = left-side (UK/JP).
+        """
         if big_img is None:
             big_img = img
         if desire is None:
