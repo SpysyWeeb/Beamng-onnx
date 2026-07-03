@@ -13,10 +13,15 @@ raw axes that convention read as full-throttle-at-rest. Bind in-game
 Options > Controls (steering = xaxis, throttle = zaxis, brake =
 rxaxis), no axis-invert needed.
 
+Axis assignment matches what BeamNG's binding screen actually reads
+off this device (verified in-game): steering = X, throttle = Y,
+brake = RZ ("R Z AXIS"). The earlier throttle-on-Z was dead because
+BeamNG binds throttle to the Y axis, which we were leaving at zero.
+
     ABS_X   0..65535   steering, 32767 = center
-    ABS_Z   0..65535   throttle, 0 = released, 65535 = full
-    ABS_RZ  0..65535   brake,    0 = released, 65535 = full
-    ABS_Y   0..65535   clutch,   0 = released (never pressed by us)
+    ABS_Y   0..65535   throttle, 0 = released, 65535 = full  (BeamNG "Y")
+    ABS_RZ  0..65535   brake,    0 = released, 65535 = full  (BeamNG "R Z")
+    ABS_Z   0..65535   spare, always 0 (kept so SDL axis indices are stable)
 
 Permissions: /dev/uinput must be writable. On this dev machine the
 seat ACL already grants it; elsewhere add the udev rule printed by
@@ -90,8 +95,8 @@ class VirtualWheel:
             return
         self._last = (s, t, b)
         self._ui.write(e.EV_ABS, e.ABS_X, s)
-        self._ui.write(e.EV_ABS, e.ABS_Z, t)
-        self._ui.write(e.EV_ABS, e.ABS_RZ, b)
+        self._ui.write(e.EV_ABS, e.ABS_Y, t)     # BeamNG "Y AXIS" = throttle
+        self._ui.write(e.EV_ABS, e.ABS_RZ, b)    # BeamNG "R Z AXIS" = brake
         self._ui.syn()
 
     def neutral(self) -> None:
