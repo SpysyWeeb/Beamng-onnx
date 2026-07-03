@@ -56,6 +56,27 @@ def test_corner_scanner():
           13.0 < lc.last_v_target < 15.0, f"vT={lc.last_v_target:.2f}")
 
 
+def test_speed_scale_persistence():
+    # the sim-scale speed correction is a per-vehicle calibration value:
+    # warm-started from disk, survives engage/disengage, saved clamped.
+    from simsteer.core.control import load_speed_scale, save_speed_scale
+    from simsteer.paths import data_dir
+    key = "beamng-regressioncar"
+    save_speed_scale(key, 1.137)
+    check("speed scale round-trips", abs(load_speed_scale(key) - 1.137) < 1e-3)
+    save_speed_scale(key, 5.0)
+    check("insane scale clamped on save", load_speed_scale(key) <= 1.4)
+    check("unknown vehicle warm-starts at 1.0",
+          load_speed_scale("beamng-nosuchcar") == 1.0)
+    lc = LongitudinalController(ControllerConfig(), speed_scale=1.12)
+    check("controller warm-starts from persisted scale",
+          abs(lc.speed_scale - 1.12) < 1e-6)
+    lc.reset()
+    check("speed scale NOT wiped on engage/disengage",
+          abs(lc.speed_scale - 1.12) < 1e-6)
+    os.remove(os.path.join(str(data_dir()), f"speed_scale_{key}.json"))
+
+
 def test_fb_integrator_gate():
     cfg = ControllerConfig()
     lc = LongitudinalController(cfg)
@@ -161,6 +182,7 @@ def test_action_head_override():
 
 if __name__ == "__main__":
     test_corner_scanner()
+    test_speed_scale_persistence()
     test_fb_integrator_gate()
     test_no_vision_intervention()
     test_curvature_clip()

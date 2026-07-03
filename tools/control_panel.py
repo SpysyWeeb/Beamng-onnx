@@ -51,7 +51,9 @@ np.seterr(divide="ignore", invalid="ignore")
 
 from simsteer.core.calibration import Calibration
 from simsteer.core.constants import DESIRE_LEN
-from simsteer.core.control import ControllerConfig, LateralController, LongitudinalController
+from simsteer.core.control import (ControllerConfig, LateralController,
+                                   LongitudinalController, load_speed_scale,
+                                   save_speed_scale)
 from simsteer.core.learners.livecalib import LiveCalib
 from simsteer.core.learners.liveparams import LiveParams
 from simsteer.core.model import DrivingModel
@@ -467,7 +469,11 @@ class App:
         self.calib_live = False
         self.lc.apply = False
         self.lat = LateralController(cfg, live_params=self.lp)
-        self.long = LongitudinalController(cfg)
+        # Warm-start the sim-scale speed correction from this vehicle's
+        # persisted calibration (camera-height driven, so per-vehicle);
+        # it keeps adapting live and is saved back on exit.
+        self.long = LongitudinalController(
+            cfg, speed_scale=load_speed_scale(self._game_key))
 
         self.engaged = False
         # exp: model's e2e accel; chill: cruise at cap + leads/corners;
@@ -1570,6 +1576,14 @@ def main() -> int:
         try:
             if app.lp.session_samples > 0:
                 app.lp.save()
+        except Exception:
+            pass
+        try:
+            # persist the converged per-vehicle speed scale for the
+            # next session's warm-start (skip screen mode: no telemetry
+            # speed, so the live scale never leaves 1.0 meaningfully)
+            if not app.screen_mode:
+                save_speed_scale(app._game_key, app.long.speed_scale)
         except Exception:
             pass
         try:

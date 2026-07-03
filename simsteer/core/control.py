@@ -659,6 +659,31 @@ class LateralController:
         return axis
 
 
+def load_speed_scale(game: str | None) -> float:
+    """Warm-start value for the per-vehicle sim-scale speed correction.
+    It's a CALIBRATION quantity (camera-height driven), persisted per
+    vehicle so each car reloads its own converged scale instead of
+    re-learning from 1.0 every session. 1.0 when none is saved yet."""
+    p = load_with_fallback("speed_scale", game)
+    if p is not None:
+        try:
+            return float(json.loads(p.read_text()).get("scale", 1.0))
+        except Exception:
+            pass
+    return 1.0
+
+
+def save_speed_scale(game: str | None, scale: float) -> None:
+    """Persist the converged per-vehicle speed scale (clamped to a
+    sane band so a bad session can't poison the warm-start)."""
+    scale = float(np.clip(scale, 1.0, 1.4))
+    try:
+        state_path("speed_scale", game).write_text(
+            json.dumps({"scale": round(scale, 4)}))
+    except Exception:
+        pass
+
+
 class LongitudinalController:
     """Plan -> (throttle, brake) trigger axes.
 
@@ -677,14 +702,21 @@ class LongitudinalController:
 
     _T_IDXS = np.asarray(T_IDXS, dtype=np.float32)
 
-    def __init__(self, cfg: ControllerConfig | None = None) -> None:
+    def __init__(self, cfg: ControllerConfig | None = None,
+                 speed_scale: float = 1.0) -> None:
         self.cfg = cfg or ControllerConfig()
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
-        self._spd_scale = 1.0
+        # Sim-scale speed correction — a per-vehicle CALIBRATION value
+        # (driven by camera height: the bastion reads speed correctly,
+        # the pickup's high camera under-reads it). Warm-started from
+        # the persisted per-vehicle value and refined live; NOT reset
+        # on engage/disengage (it's a slow calibration quantity, not
+        # transient state).
+        self._spd_scale = float(speed_scale)
         self._was_moving = False
         self._stop_brake = 0.0
         # accel-feedback state: measured accel LPF, previous v, and a
@@ -710,13 +742,20 @@ class LongitudinalController:
         self.last_lead_ttc = float("inf")
         self.last_aeb = False
 
+    @property
+    def speed_scale(self) -> float:
+        """The live per-vehicle sim-scale speed correction (for
+        persistence — see load_speed_scale/save_speed_scale)."""
+        return self._spd_scale
+
     def reset(self) -> None:
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
         self._a_cmd_smooth = 0.0
         self._v_err_i = 0.0
-        self._spd_scale = 1.0
+        # _spd_scale intentionally NOT reset — it's a persisted
+        # per-vehicle calibration value, not transient engage state.
         self._was_moving = False
         self._stop_brake = 0.0
         # accel-feedback state: measured accel LPF, previous v, and a
