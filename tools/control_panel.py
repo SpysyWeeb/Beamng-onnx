@@ -421,6 +421,7 @@ class App:
         self._incident_t = 0.0
         self.incident_note: str | None = None
         self._snap_req = False
+        self._conf_low_t = 0.0
         # Model-wants vs car-does instrumentation: ~15 s sparkline ring
         # buffers drawn on the viewer, plus a per-session CSV run log
         # (every control tick) for offline plots — tools/plot_run.py.
@@ -850,6 +851,23 @@ class App:
         self.lane_off_now = float(np.mean(decoded.lane_lines[1:3, 0, 0]))
         self.k_meas_now = k_meas if v_ego > 1.0 else 0.0
         self.conf_now = float(np.mean(decoded.lane_lines_prob[1:3]))
+
+        # Lost-road guard: sustained lane-vision collapse while moving
+        # means the car has left the pavement (2026-07-02 crash: 15 s
+        # of probs ~0.01 while the model tried full-lock recovery
+        # U-turns). Trip after 2.5 s below 0.15 at speed; hold the
+        # stop until vision genuinely recovers.
+        if self.engaged and self.conf_now < 0.15 and v_ego > 3.0:
+            self._conf_low_t += dt
+        elif self.conf_now > 0.40 or not self.engaged:
+            self._conf_low_t = 0.0
+            if self.long.road_lost:
+                self.long.road_lost = False
+                self.set_banner("road found — resuming")
+        if self._conf_low_t > 2.5 and not self.long.road_lost:
+            self.long.road_lost = True
+            self.set_banner("ROAD LOST — stopping", 5.0)
+
         long_live = self.engaged and self.long_mode != "off" \
             and not self.cal_active
         lat_live = self.engaged and not self.cal_active

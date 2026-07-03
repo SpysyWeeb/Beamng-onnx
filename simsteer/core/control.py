@@ -348,10 +348,14 @@ class ControllerConfig:
     # brake hard for tight bends instead of waiting for the model's
     # (often conservative) planned velocity to drop. 2-3 m/s^2 feels
     # comfortable, 4-5 is firm, 6+ is aggressive. Set 0 to disable.
-    # MUST NOT exceed lat_accel_max_mps2 (the ISO clamp on commanded
-    # curvature): if long carries more speed into a bend than lateral
-    # is allowed to use, the car understeers off the curve. Matched.
-    max_lat_accel_mps2: float = 3.5
+    # MUST BE BELOW lat_accel_max_mps2 (the ISO clamp on commanded
+    # curvature), not merely matched: if long plans entry speed at
+    # exactly the lateral limit, any mid-corner tightening finds zero
+    # curvature reserve and the car runs wide (2026-07-02 canyon
+    # right-hander: k tracked perfectly at the 3.5 clamp, desired lat
+    # accel pinned at 3.5, off-center grew to 1.3 m, off the road).
+    # 3.0 planning vs 3.5 execution keeps ~15% curvature headroom.
+    max_lat_accel_mps2: float = 3.0
     # How far ahead in the plan to scan for the tightest upcoming
     # corner. Should be ≥ long_anticipation_s. Default 6 s covers
     # ~150 m at 25 m/s and ~200 m at 33 m/s — long enough to register
@@ -662,8 +666,14 @@ class LongitudinalController:
         self.last_lead_v_target = float("inf")  # v_target imposed by lead
         self.last_lead_ttc = float("inf")
         self.last_aeb = False
+        # Lost-road guard, set by the app when lane vision collapses
+        # while moving. Forces the plan target to a smooth stop through
+        # the normal jerk pipeline instead of letting a blind plan keep
+        # driving, and blocks the creep probe from re-launching.
+        self.road_lost = False
 
     def reset(self) -> None:
+        self.road_lost = False
         self.last_v_target = 0.0
         self.last_a_target = 0.0
         self.last_a_cmd = 0.0
@@ -747,6 +757,10 @@ class LongitudinalController:
                 corner_k = float(ks_scan[idx_min])
                 if v_safe_corner < v_target:
                     v_target = v_safe_corner
+
+        if self.road_lost:
+            v_target = 0.0
+            a_target = min(a_target, 0.0)
 
         # ACC / lead following. The most-confident lead (index 0 in
         # the decoded.leads tensor — already sorted by prob in MHP
@@ -959,7 +973,8 @@ class LongitudinalController:
                 self._hold_t += dt
                 if (self._hold_t > cfg.creep_probe_after_s
                         and self._probe_count < cfg.creep_probe_max
-                        and lead_x > 60.0 and not aeb):
+                        and lead_x > 60.0 and not aeb
+                        and not self.road_lost):
                     self._probe_t = cfg.creep_probe_len_s
                     self._probe_dist = 0.0
                     self._probe_count += 1
