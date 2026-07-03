@@ -111,7 +111,21 @@ class BeamNGOnnxWorld:
         self.cam_height_m = spec["cam_height_m"]
         self.wheelbase_m = spec["wheelbase_m"]
         self.bng = BeamNGpy(host, port)
-        self.bng.open(launch=False)
+        # Retry the handshake: if the panel was spawned the instant the
+        # tech port opened (game still initializing), the first open()
+        # can throw. A few backed-off attempts ride that out instead of
+        # crashing the panel and leaving the game at the menu.
+        import time as _t
+        for attempt in range(5):
+            try:
+                self.bng.open(launch=False)
+                break
+            except Exception:
+                if attempt == 4:
+                    raise
+                print(f"[world] BeamNG not ready yet, retrying "
+                      f"({attempt + 1}/5) ...", flush=True)
+                _t.sleep(3.0)
 
         if attach:
             sc = self.bng.scenario.get_current(connect=False)

@@ -235,7 +235,16 @@ class LauncherCore:
             if not port_open():
                 self.log("gave up waiting for the tech port.")
                 return
-            self.log("BeamNG is up.")
+
+        # The tport socket opens EARLY in boot — before the game can
+        # actually handle beamngpy commands. Spawning the panel now
+        # makes its bng.open() hit the game mid-init, throw, and crash
+        # (game left at the menu, no scene). Wait for a REAL handshake.
+        self.log("BeamNG port up — waiting for it to be ready ...")
+        if not self._wait_ready():
+            self.log("BeamNG never became ready for beamngpy.")
+            return
+        self.log("BeamNG is ready.")
 
         attach = self.map != "west_coast_usa"
         if attach and not self._probe_attach():
@@ -250,6 +259,21 @@ class LauncherCore:
         self._spawn_panel(args)
         self.log("control panel launching — its window appears once the "
                  "scenario loads.")
+
+    def _wait_ready(self, timeout_s: float = 180.0) -> bool:
+        """Poll a real beamngpy handshake until it succeeds — the port
+        opening isn't enough, the game must accept a connection."""
+        from beamngpy import BeamNGpy
+        t_end = time.monotonic() + timeout_s
+        while time.monotonic() < t_end:
+            try:
+                bng = BeamNGpy("127.0.0.1", TECH_PORT)
+                bng.open(launch=False)
+                bng.disconnect()
+                return True
+            except Exception:
+                time.sleep(3.0)
+        return False
 
     def _probe_attach(self) -> bool:
         self.log(f"checking for a drivable car ({self.map}) ...")
