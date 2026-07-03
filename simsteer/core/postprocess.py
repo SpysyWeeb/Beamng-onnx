@@ -262,12 +262,19 @@ def desired_curvature_lag_adjusted(
         last_desired_curvature + hi,
     ))
     # openpilot's clip_curvature also clamps the magnitude: lateral
-    # accel (v^2 * k) to +/-3.0 m/s^2, and curvature to +/-0.2 (a turn
-    # radius tighter than most cars can achieve).
+    # accel (v^2 * k) to +/-3.0 m/s^2, and curvature to +/-0.2. But the
+    # flat 0.2 is a highway-hardware constant — a real 90-degree city
+    # corner is radius 3-4 m (k 0.25-0.3), which 0.2 forbids at ANY
+    # speed. That's why openpilot runs wide on sharp turns, and logged
+    # turns here pinned at 0.2 while lat accel was only ~3 (turn
+    # forensics 2026-07-02). Open the ceiling to 0.35 at crawl speed,
+    # tapering back to the ISO 0.2 wherever v^2*0.35 would exceed the
+    # comfort bound — the lat-accel clamp stays the binding limit.
     if lat_accel_max_mps2 is not None:
         lim = float(lat_accel_max_mps2) / (v * v)
+        k_cap = float(np.clip(lim, 0.2, 0.35))
         safe_desired_k = float(np.clip(safe_desired_k, -lim, lim))
-        safe_desired_k = float(np.clip(safe_desired_k, -0.2, 0.2))
+        safe_desired_k = float(np.clip(safe_desired_k, -k_cap, k_cap))
     return safe_desired_k
 
 

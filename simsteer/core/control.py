@@ -366,6 +366,23 @@ class ControllerConfig:
     # the hood-cam-on-AC case where the model registered curves but
     # the scanner truncated before reaching them.
     corner_scan_horizon_s: float = 6.0
+    # Intersection-turn speed governor. Without nav the model commits
+    # to a turn late, so the plan's PEAK curvature appears only 1-2 s
+    # out — too late for the corner scanner alone to shed speed
+    # (logged failure: 9.2 m/s entry into a 5 m-radius corner that
+    # supports 3.9). Two earlier tells clamp v_target to
+    # `turn_speed_mps` (human city-turn pace):
+    #  - desire_state turnLeft+turnRight belief > `turn_desire_prob`
+    #    (fires for user-commanded TURN-button turns; the model keeps
+    #    desire at "none" for its own spontaneous route choices), or
+    #  - heading change accumulated through tight (r < 50 m) arcs of
+    #    the scanned plan > `turn_yaw_span_rad` — a 90-deg turn shows
+    #    its heading span seconds before its peak curvature, while
+    #    highway sweepers accumulate nothing.
+    # Set turn_speed_mps 0 to disable.
+    turn_speed_mps: float = 4.5
+    turn_desire_prob: float = 0.3
+    turn_yaw_span_rad: float = 0.5
 
     # ----- ACC / lead following -----
     # The model emits 3 lead-vehicle hypotheses with (x, y, v, a) at
@@ -740,6 +757,7 @@ class LongitudinalController:
         v_safe_corner = float("inf")
         corner_t = 0.0
         corner_k = 0.0
+        turn_yaw_span = 0.0
         if cfg.max_lat_accel_mps2 > 0.0:
             scan_horizon = max(t, float(cfg.corner_scan_horizon_s))
             mask = (self._T_IDXS >= 0.0) & (self._T_IDXS <= scan_horizon)
@@ -758,6 +776,25 @@ class LongitudinalController:
                 corner_k = float(ks_scan[idx_min])
                 if v_safe_corner < v_target:
                     v_target = v_safe_corner
+            # Heading change accumulated through TIGHT (r < 50 m)
+            # stretches of the scanned plan. A 90-degree intersection
+            # turn announces most of its heading span seconds before
+            # its peak curvature is drawn (logged: plan velocity and
+            # yaw committed ~4 s out while executed k was still tiny),
+            # while highway sweepers (k < 0.02) accumulate nothing.
+            if ts_scan.size > 1:
+                dts = np.diff(ts_scan)
+                wr = np.abs(yaw_rate_plan[mask])[1:]
+                tight = ks_scan[1:] > 0.02
+                turn_yaw_span = float(np.sum(wr[tight] * dts[tight]))
+
+        if cfg.turn_speed_mps > 0.0:
+            turn_p = float(decoded.desire_state[1] + decoded.desire_state[2])
+            if ((turn_p > cfg.turn_desire_prob
+                 or turn_yaw_span > cfg.turn_yaw_span_rad)
+                    and v_target > cfg.turn_speed_mps):
+                v_target = cfg.turn_speed_mps
+                a_target = min(a_target, 0.0)
 
         if self.road_lost:
             v_target = 0.0
