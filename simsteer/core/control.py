@@ -577,7 +577,13 @@ class LateralController:
                 time.monotonic() - self.live_params.last_intervened_ts < 1.0)
             if v_ego < 8.0:
                 freeze_reason = "slow"
-            elif abs(target_wheel) > 0.05:
+            elif abs(target_wheel) > 0.0045:
+                # ~= |k| > 0.0015: any real curve. The old 0.05 rad
+                # (k ~ 0.017) let canyon sweepers through and the
+                # integrator wound +/-0.02 on the lag transient, paid
+                # back as exit overshoot (act crossing above want,
+                # 2026-07-02 canyon logs). Crown/bias correction only
+                # needs straights, so nothing is lost by being strict.
                 freeze_reason = "corner"
             elif self.last_in_lane_change:
                 freeze_reason = "lc"

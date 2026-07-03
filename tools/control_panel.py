@@ -688,11 +688,14 @@ class App:
                 if c > best_c:
                     best_c, lag_s = c, k * 0.05
         # Lead the plan by the measured command->response delay:
-        # k_des->k_meas cross-correlation on logged turn segments reads
-        # 0.25-0.35 s (rate limiter + EPS tau + vehicle yaw response).
-        # 0.20 covers the vehicle side; the EPS constant rides on top.
+        # k_des->k_meas cross-correlation reads 0.30-0.35 s on canyon
+        # sweepers at 25-28 m/s (rate limiter + EPS tau + vehicle yaw
+        # response). Under-leading self-inflates: the late response
+        # leaves the car wide mid-curve, the model asks for extra
+        # curvature, and the want/act chart splits ~25% on every ramp.
+        # 0.25 covers the vehicle side; the EPS constant rides on top.
         self.cfg.lookahead_s = float(np.clip(
-            0.20 + self.cfg.steer_smooth_s, 0.10, 0.40))
+            0.25 + self.cfg.steer_smooth_s, 0.10, 0.40))
 
         # Pedal-map fit: achieved accel vs pedal position, slope with
         # intercept (the intercept absorbs drag/rolling resistance —
