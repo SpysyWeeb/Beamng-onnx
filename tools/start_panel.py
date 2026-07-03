@@ -168,6 +168,7 @@ class StartPanel:
         self.model = cfg.get("model") or DEFAULT_MODEL
         if not os.path.isfile(self.model):
             self.model = self.models[0]
+        self.traffic = max(0, min(12, int(cfg.get("traffic", 0))))
         self._cfg_prefix = cfg.get("panel_cmd_prefix")
 
         self.focus: str | None = None      # "path" while typing
@@ -184,7 +185,7 @@ class StartPanel:
     def save(self) -> None:
         data = {"beamng_path": self.path, "tech_key": self.tech_key,
                 "map": self.map, "vehicle": self.vehicle,
-                "model": self.model}
+                "model": self.model, "traffic": self.traffic}
         if self._cfg_prefix:
             data["panel_cmd_prefix"] = self._cfg_prefix
         json.dump(data, open(CONFIG_PATH, "w"), indent=2)
@@ -275,6 +276,8 @@ class StartPanel:
                     self.log(f"model file missing: {self.model}")
                     return
                 args += ["--model", self.model]
+            if self.traffic > 0:
+                args += ["--traffic", str(self.traffic)]
             # `panel_cmd_prefix` in launcher_beamng.json reroutes the
             # control-panel spawn (e.g. into a distrobox where the
             # ROCm runtime lives); our args are appended verbatim.
@@ -331,6 +334,10 @@ class StartPanel:
                 self.tech_key = not self.tech_key
             elif key in ("map", "vehicle", "model"):
                 self.open_dropdown = key
+            elif key == "traffic_dn":
+                self.traffic = max(0, self.traffic - 1)
+            elif key == "traffic_up":
+                self.traffic = min(12, self.traffic + 1)
             elif key == "start":
                 self.start()
             return
@@ -428,7 +435,26 @@ class StartPanel:
                  "supercombo-compatible .onnx; pick 'browse' in the "
                  "list to point anywhere on disk")
 
-        y = 830
+        # traffic scroller: [-] N [+]
+        y = 788
+        cv2.putText(c, "TRAFFIC", (36, y + 24), FONT, 0.55, C_LABEL,
+                    1, cv2.LINE_AA)
+        for key, bx, sym in (("traffic_dn", 170, "-"),
+                             ("traffic_up", 292, "+")):
+            box = (bx, y, 44, 38)
+            self._rects[key] = box
+            cv2.rectangle(c, (box[0], box[1]),
+                          (box[0] + box[2], box[1] + box[3]), C_FIELD, -1)
+            cv2.rectangle(c, (box[0], box[1]),
+                          (box[0] + box[2], box[1] + box[3]), C_DIM, 1)
+            cv2.putText(c, sym, (box[0] + 15, box[1] + 27), FONT, 0.8,
+                        C_WHITE, 2, cv2.LINE_AA)
+        cv2.putText(c, f"{self.traffic:2d}", (232, y + 27), FONT, 0.75,
+                    C_WHITE, 2, cv2.LINE_AA)
+        cv2.putText(c, "AI cars spawned around you (0 = empty roads)",
+                    (356, y + 25), FONT, 0.45, C_LABEL, 1, cv2.LINE_AA)
+
+        y = 842
         box = (36, y, UI_W - 72, 64)
         self._rects["start"] = box
         col = (60, 160, 60) if (self.tech_key and not self.busy) \

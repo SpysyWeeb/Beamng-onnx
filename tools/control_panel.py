@@ -367,6 +367,9 @@ class App:
             map_name=getattr(args, "map", None) or "west_coast_usa",
             vehicle_model=getattr(args, "vehicle", None) or "bastion",
             attach=bool(getattr(args, "attach", False)))
+        n_traffic = int(getattr(args, "traffic", 0) or 0)
+        if n_traffic > 0:
+            self.world.spawn_traffic(n_traffic)
         if args.split:
             self.model = DrivingModel(
                 providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
@@ -1239,6 +1242,8 @@ def main() -> int:
     ap.add_argument("--model", default=None,
                     help="path to a supercombo-compatible .onnx "
                          "(default: models/driving_supercombo.onnx)")
+    ap.add_argument("--traffic", type=int, default=0,
+                    help="spawn N game-managed AI traffic vehicles")
     args = ap.parse_args()
 
     app = App(args)

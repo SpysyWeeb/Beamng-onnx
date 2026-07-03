@@ -181,6 +181,20 @@ class BeamNGOnnxWorld:
             "pos": tuple(st.get("pos", (0.0, 0.0, 0.0))),
         }
 
+    def spawn_traffic(self, n: int) -> None:
+        """Populate the map with the game's own AI traffic (`n` cars).
+        Uses the stock gameplay_traffic spawner — identical to the
+        in-game traffic button; the game manages the vehicles (routes,
+        respawns out of sight) so they cost us nothing per-frame. The
+        model sees them as leads/oncoming exactly like real traffic."""
+        try:
+            self.bng.traffic.spawn(max_amount=int(n))
+            print(f"[world] traffic: requested {n} AI vehicles",
+                  flush=True)
+        except Exception as exc:
+            print(f"[world] traffic spawn failed (continuing): {exc}",
+                  flush=True)
+
     # ---- control (M3) ----
 
     def apply(self, steering: float, throttle: float | None,
