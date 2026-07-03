@@ -41,6 +41,22 @@ CAM_POS = (0.0, -0.90, 1.30)
 CAM_DIR = (0.0, -1.0, 0.0)
 CAM_HEIGHT_M = 1.30  # approx height above road; LiveCalib refines online
 
+# Per-vehicle setup. cam_pos is the comma-style windshield-glass-top
+# mount in the vehicle's own frame (probe new vehicles with
+# tools/camera_probe.py — in-cabin mounts render glass/dash/hood-LOD
+# artifacts). "pickup" = Gavril D-Series; the crew_shortbed_4wd_A
+# config is the 2020 GMC Sierra 1500 AT4 formula (crew cab, short
+# box, 4x4, automatic), and cam height 1.66 m matches the real
+# user's comma-measured mount height being recreated.
+VEHICLE_SPECS = {
+    "bastion": dict(cam_pos=CAM_POS, cam_height_m=CAM_HEIGHT_M,
+                    wheelbase_m=2.9, part_config=None),
+    "pickup": dict(cam_pos=(0.0, -0.35, 1.66), cam_height_m=1.66,
+                   wheelbase_m=3.5,
+                   part_config="vehicles/pickup/"
+                               "d15_crew_shortbed_4wd_A.pc"),
+}
+
 # SimSteer's Calibration defaults lateral_sign=-1 (right for ETS2/AC/Forza's
 # screen-capture + gamepad conventions). Our beamngpy render is NOT mirrored
 # (verified: warped model input matches raw orientation) and the model's
@@ -82,6 +98,10 @@ class BeamNGOnnxWorld:
         self._ctl_lock = threading.Lock()
         self._signal_cache: str | None = None
         self.attached = attach
+        spec = VEHICLE_SPECS.get(vehicle_model, VEHICLE_SPECS["bastion"])
+        self.cam_pos = spec["cam_pos"]
+        self.cam_height_m = spec["cam_height_m"]
+        self.wheelbase_m = spec["wheelbase_m"]
         self.bng = BeamNGpy(host, port)
         self.bng.open(launch=False)
 
@@ -109,7 +129,8 @@ class BeamNGOnnxWorld:
             print(f"[world] loading scenario {map_name} ...", flush=True)
             scenario = Scenario(map_name, "beamng_onnx")
             self.vehicle = Vehicle("ego", model=vehicle_model,
-                                   license="ONNX")
+                                   license="ONNX",
+                                   part_config=spec["part_config"])
             scenario.add_vehicle(self.vehicle, pos=SPAWN_POS,
                                  rot_quat=SPAWN_ROT_QUAT)
             scenario.make(self.bng)
@@ -120,7 +141,7 @@ class BeamNGOnnxWorld:
         self.camera = Camera(
             "onnxcam", self.bng, self.vehicle,
             requested_update_time=0.05,  # 20 Hz — never render more than we consume
-            pos=CAM_POS, dir=CAM_DIR, up=(0, 0, 1),
+            pos=self.cam_pos, dir=CAM_DIR, up=(0, 0, 1),
             field_of_view_y=fov_v_deg(CAM_FOV_H_DEG, CAM_W, CAM_H),
             resolution=(CAM_W, CAM_H),
             near_far_planes=(0.1, 1000.0),

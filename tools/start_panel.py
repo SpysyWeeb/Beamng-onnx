@@ -175,8 +175,13 @@ class StartPanel:
         self.map = cfg.get("map", "west_coast_usa")
         if self.map not in self.levels:
             self.map = self.levels[0]
-        self.vehicles = ["bastion"]
+        # bastion = the measured-and-tuned sedan; pickup = Gavril
+        # D-Series crew-cab 4x4 auto (2020 Sierra AT4 recreation,
+        # camera at the real user's 1.66 m comma mount height)
+        self.vehicles = ["bastion", "pickup"]
         self.vehicle = cfg.get("vehicle", "bastion")
+        if self.vehicle not in self.vehicles:
+            self.vehicle = "bastion"
         self.models = scan_models()
         self.model = cfg.get("model") or DEFAULT_MODEL
         if not os.path.isfile(self.model):

@@ -62,12 +62,13 @@ from simsteer.ui.overlay import draw_overlay
 
 from beamng.world import (BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG,
                           CAM_HEIGHT_M, CAM_LATERAL_SIGN, SPAWN_POS,
+                          VEHICLE_SPECS,
                           SPAWN_ROT_QUAT)
 
 # ASCII only: cv2's Qt backend fails setMouseCallback ("NULL window
 # handler") when the window name contains non-ASCII (e.g. an em-dash).
 WINDOW = "Beamng-onnx control panel"
-WHEELBASE_M = 2.9          # bastion-ish; constant error folds into LiveParams
+# wheelbase now comes from beamng.world.VEHICLE_SPECS per vehicle
 # Vertical-rectangle layout (op-replay-clipper style): model view on
 # top, telemetry panel below, buttons + HUD at the bottom.
 UI_W = 760
@@ -358,9 +359,17 @@ class Panel:
 
 class App:
     def __init__(self, args):
+        vehicle = getattr(args, "vehicle", None) or "bastion"
+        spec = VEHICLE_SPECS.get(vehicle, VEHICLE_SPECS["bastion"])
+        self._cam_height = spec["cam_height_m"]
+        self.wheelbase = spec["wheelbase_m"]
+        # per-vehicle state files: the bastion's CAL rack fit / pedal
+        # maps / camera pose must not bleed into other vehicles
+        self._game_key = ("beamng" if vehicle == "bastion"
+                          else f"beamng-{vehicle}")
         self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
                                  fov_h_deg=CAM_FOV_H_DEG,
-                                 height_m=CAM_HEIGHT_M,
+                                 height_m=self._cam_height,
                                  lateral_sign=CAM_LATERAL_SIGN)
         # World FIRST, GPU session second (RDNA4 level-load VRAM rule).
         self.world = BeamNGOnnxWorld(
@@ -406,8 +415,8 @@ class App:
             print(f"[panel] in-game panel load skipped: {exc}", flush=True)
 
         # per-game config: CAL persists the measured lookahead here
-        cfg = ControllerConfig.load(game="beamng")
-        cfg.wheelbase_m = WHEELBASE_M
+        cfg = ControllerConfig.load(game=self._game_key)
+        cfg.wheelbase_m = self.wheelbase
         cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
         self.cfg = cfg
         # after cfg: the 100 Hz steering executor takes its EPS time
@@ -415,12 +424,12 @@ class App:
         self.sender = ControlSender(self.world,
                                     steer_tau=cfg.steer_smooth_s)
         self.sender.start()
-        self.lp = LiveParams(game="beamng")
+        self.lp = LiveParams(game=self._game_key)
         # Online camera-pose calibration (openpilot's calibrationd):
         # learns effective pitch/yaw/height while driving, commits into
         # calib (warp + overlay) once CALIBRATED. Persists per-game, so
         # like openpilot it fully calibrates once and refines forever.
-        self.lc = LiveCalib(game="beamng")
+        self.lc = LiveCalib(game=self._game_key)
         # SHADOW by default (field report 2026-07-01: stops-short, lane
         # drift, and long hunting all appeared together after livecalib
         # started applying — and it was rejecting 73% of its samples).
@@ -581,7 +590,7 @@ class App:
         else:
             self.calib.pitch_deg = 0.0
             self.calib.yaw_deg = 0.0
-            self.calib.height_m = CAM_HEIGHT_M
+            self.calib.height_m = self._cam_height
             self.set_banner("camera calib SHADOW: stock mount pose "
                             "(learner keeps estimating)", 3.5)
 
@@ -766,7 +775,7 @@ class App:
         # braking keeps its own 6 s scan horizon; this only times
         # plan-following.
         self.cfg.long_anticipation_s = 0.3
-        self.cfg.save(game="beamng")
+        self.cfg.save(game=self._game_key)
 
         self.set_banner(f"CAL done: a={a:+.2f} ({n} samples, frozen)  "
                         f"lag={lag_s*1000:.0f}ms lookahead "
@@ -780,7 +789,7 @@ class App:
         # Synthesized wheel angle from the model's ego yaw rate.
         yaw_rate = float(decoded.pose[5])
         k_meas = yaw_rate / max(v_ego, 1.0)
-        wheel = math.atan(k_meas * WHEELBASE_M) if v_ego > 1.0 else None
+        wheel = math.atan(k_meas * self.wheelbase) if v_ego > 1.0 else None
 
         desire_active = (self.desire_idx is not None
                          and now < self.desire_until)
