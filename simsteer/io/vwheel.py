@@ -57,17 +57,24 @@ class VirtualWheel:
     """A single always-on virtual wheel; call set() at any rate."""
 
     def __init__(self, name: str = "Logitech G29 Driving Force Racing Wheel"):
+        # Declare the FULL 6-axis set (X Y Z RX RY RZ). BeamNG names
+        # joystick axes by POSITION (x,y,z,rx,ry,rz), so its default
+        # G29 bindings — throttle="y" (pos 2), brake="rz" (pos 6) — only
+        # line up if ABS_RZ actually sits in the 6th slot. With only 4
+        # axes ABS_RZ fell into the "rx" slot (pos 4) and the brake
+        # binding pointed at a slot we never drove. The RX/RY spares
+        # push ABS_RZ to pos 6 = "rz" where the brake is bound.
+        _p = dict(min=0, max=_PEDAL_MAX, fuzz=0, flat=0, resolution=0)
         caps = {
             e.EV_ABS: [
                 (e.ABS_X, AbsInfo(value=_STEER_MAX // 2, min=0,
                                   max=_STEER_MAX, fuzz=0, flat=0,
                                   resolution=0)),
-                (e.ABS_Y, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
-                                  fuzz=0, flat=0, resolution=0)),
-                (e.ABS_Z, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
-                                  fuzz=0, flat=0, resolution=0)),
-                (e.ABS_RZ, AbsInfo(value=0, min=0, max=_PEDAL_MAX,
-                                   fuzz=0, flat=0, resolution=0)),
+                (e.ABS_Y, AbsInfo(value=0, **_p)),    # pos 2 "y"  throttle
+                (e.ABS_Z, AbsInfo(value=0, **_p)),    # pos 3 "z"  spare
+                (e.ABS_RX, AbsInfo(value=0, **_p)),   # pos 4 "rx" spare
+                (e.ABS_RY, AbsInfo(value=0, **_p)),   # pos 5 "ry" spare
+                (e.ABS_RZ, AbsInfo(value=0, **_p)),   # pos 6 "rz" brake
             ],
             # a few bindable buttons (engage toggles etc. if ever wanted)
             e.EV_KEY: [e.BTN_TRIGGER, e.BTN_THUMB, e.BTN_TOP, e.BTN_TOP2],
