@@ -901,10 +901,10 @@ class App:
             self._conf_low_t = 0.0
             if self.long.road_lost:
                 self.long.road_lost = False
-                self.set_banner("road found — resuming")
+                self.set_banner("road found - resuming")
         if self._conf_low_t > 2.5 and not self.long.road_lost:
             self.long.road_lost = True
-            self.set_banner("ROAD LOST — stopping", 5.0)
+            self.set_banner("ROAD LOST - stopping", 5.0)
 
         long_live = self.engaged and self.long_mode != "off" \
             and not self.cal_active
