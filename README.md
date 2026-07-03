@@ -161,10 +161,12 @@ measured rack model, then executed at ~100 Hz:
 - **Rate limiter only** — the ISO curvature/lat-accel *magnitude*
   clamps are off by default (the sim's tires are the real limit); the
   ISO-jerk rate limiter (with faster unwind) shapes how fast the wheel
-  turns. Corner *entry speed* is governed separately.
-- Turn governor slows to a walking pace at intersections (from the
-  plan's accumulated heading or a TURN command), since without
-  navigation the model commits to a turn late.
+  turns.
+- **Corner scanner** for entry speed: the plan's own upcoming curvature
+  sets a comfort-bounded safe speed (`sqrt(a_lat_max/κ)`). The model
+  plans its own turn speed; we no longer override it with a fixed
+  intersection governor (that was compensating the speed under-read,
+  now fixed at the source).
 
 **Longitudinal** — follow the plan's velocity/accel through measured
 pedal maps, with corrections that mirror the real model's envelope:
@@ -172,13 +174,17 @@ pedal maps, with corrections that mirror the real model's envelope:
 - Pedal maps are measured interpolation tables (throttle/brake vs
   commanded accel), since sim pedal response saturates and isn't affine.
 - **Sim-scale speed correction** (the big one — see below): the plan
-  velocity is scaled by the model's live `v_ego / pose_v` because the
-  model under-reads its speed in BeamNG.
-- **E2E decel envelope**: on open road (no lead/AEB) commanded decel is
-  floored at −2.5 m/s², the real model's measured minimum — phantom
-  slowdowns stay gentle; leads and AEB keep full braking.
-- Integral speed-trim, gated to steady cruise; stopping logic with a
-  creep probe to break stop-hold deadlocks.
+  velocity is scaled by the model's live `v_ego / pose_v` because a
+  high camera makes the model under-read its speed. It's a per-vehicle
+  **calibration** value now — persisted per car and warm-started, since
+  it's driven by camera height (the bastion barely needs it, the tall
+  pickup needs ~1.14).
+- **E2E decel envelope**: off by default. It floored open-road decel to
+  soften phantom hard-stops, but those came from the speed under-read
+  (now fixed at the source), so it's redundant; the gated mechanism
+  stays for a one-value re-enable if the model ever brakes too hard.
+- Integral speed-trim, gated to steady cruise; a minimal openpilot-style
+  stop-hold (brake ramp that releases when the plan wants speed).
 
 **Best-effort principle:** like real openpilot, the controller does not
 intervene on low vision confidence — it drives on whatever the model
@@ -197,14 +203,17 @@ runs frame-by-frame.
   hesitance. One-hot fix (`tc[int(is_rhd)]=1`, so US = `(1,0)`) turned
   20 mph timid crawling into 54 mph steady cruise. This was the single
   biggest behavior fix.
-- **The model under-reads its own speed by ~10-13%.** BeamNG isn't 1:1
-  scale, so the scene flows past ~10% slow; a model trained on real
-  roads reads a true 55 mph as ~48 (measured live: `pose_v/v_ego`
-  ≈ 0.88; real car = 1.001). The model has no speed input, so in e2e it
-  plans at its perceived-low speed and the controller brakes to a
-  phantom stop — and it's exactly why e2e never reached speed while
-  chill mode did. Fixed by scaling the plan velocity by the model's own
-  live `v_ego/pose_v`.
+- **The speed under-read is camera height, not world scale.** A tall
+  camera under-reads speed: ground optical flow scales as `v/h`, so the
+  model (trained near ~1.2 m) reads a true 55 mph as ~48 from the
+  pickup's 1.95 m mount (`pose_v/v_ego` ≈ 0.88), while the bastion at
+  1.30 m reads it right (0.995). The *spatial* scale is fine — lane
+  width 3.82 m vs 3.7 m, yaw 1.028 — so this is the only perception axis
+  that's off, and it's **per-vehicle**. The model has no speed input, so
+  in e2e it plans at its perceived-low speed and the controller brakes
+  to a phantom stop (exactly why e2e never reached speed while chill
+  mode did). Fixed by scaling the plan velocity by the model's own live
+  `v_ego/pose_v`, now persisted as a per-vehicle calibration.
 - **"Confidence" doesn't gate stopping.** `modelV2.confidence` is a
   RED/YELLOW/GREEN disengage-alert enum; on a smooth real drive it read
   "red" 95% of the time while never stopping, and lane confidence
@@ -222,7 +231,8 @@ runs frame-by-frame.
 - **The big model has an action head; CD210 doesn't.** The real car's
   smoothness partly comes from a trained, gently-bounded acceleration
   output. CD210's action slot is padding, so we derive accel from the
-  plan (choppier) — which is why the decel envelope cap helps.
+  plan, which is choppier — so if CD210 ever brakes too hard on open
+  road, the (now-off) decel envelope is the intended remedy.
 - **Gore points confuse E2E without navigation.** At road forks the
   model doesn't commit to a branch and drifts toward the dirt divider,
   then correctly slows because its path leaves the pavement. Real
