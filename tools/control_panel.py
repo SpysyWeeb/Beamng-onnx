@@ -161,7 +161,7 @@ class Telemetry(threading.Thread):
 
 MOD_PORT = 64257
 MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
-            "cal", "ai", "spd_dn", "spd_up", "cam"}
+            "cal", "ai", "spd_dn", "spd_up", "cam", "snap"}
 
 
 class ControlSender(threading.Thread):
@@ -420,6 +420,7 @@ class App:
         # mystery) — main loop writes the frame+state on request
         self._incident_t = 0.0
         self.incident_note: str | None = None
+        self._snap_req = False
         # Model-wants vs car-does instrumentation: ~15 s sparkline ring
         # buffers drawn on the viewer, plus a per-session CSV run log
         # (every control tick) for offline plots — tools/plot_run.py.
@@ -506,6 +507,10 @@ class App:
             self.start_cal()
         elif key == "cam":
             self.set_calib_live(not self.calib_live)
+        elif key == "snap":
+            # remote flight-recorder shutter: capture the full canvas
+            # + model-belief note on the next tick, no trigger gates
+            self._snap_req = True
         elif key in ("spd_dn", "spd_up"):
             # step in whole-5-mph notches (55, 60, 65 ...) like a real
             # cruise stalk; snap first in case the cap started off-grid
@@ -864,7 +869,8 @@ class App:
             self._log_f.write(
                 "t,eng,mode,cal,v_ego,v_target,a_target,a_cmd,a_fb,"
                 "a_meas,thr,brk,steer,k_des,k_meas,lane_off,lead_x,"
-                "lead_p,pitch_applied,pitch_learned\n")
+                "lead_p,pitch_applied,pitch_learned,"
+                "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim\n")
             print(f"[panel] run log: {self.log_path}", flush=True)
         lead_p = (float(decoded.lead_prob[0])
                   if decoded.lead_prob.size else 0.0)
@@ -879,7 +885,13 @@ class App:
             f"{self.lane_off_now:.3f},"
             f"{min(self.long.last_lead_x, 999.0):.1f},{lead_p:.2f},"
             f"{self.calib.pitch_deg:.3f},"
-            f"{self.lc.pitch_estimate if self.lc.pitch_estimate is not None else 0.0:.3f}\n")
+            f"{self.lc.pitch_estimate if self.lc.pitch_estimate is not None else 0.0:.3f},"
+            f"{decoded.lane_lines_prob[0]:.2f},{decoded.lane_lines_prob[1]:.2f},"
+            f"{decoded.lane_lines_prob[2]:.2f},{decoded.lane_lines_prob[3]:.2f},"
+            f"{int(np.argmax(decoded.desire_state))},"
+            f"{float(np.max(decoded.desire_state)):.2f},"
+            f"{float(decoded.plan[-1, 3]):.2f},"
+            f"{self.lat.axis_trim_state:+.4f}\n")
 
         # flight recorder trigger: engaged, moving, and the plan's
         # velocity target collapsed well below current speed with no
@@ -891,6 +903,14 @@ class App:
             self._incident_t = now
             self.incident_note = (
                 f"v={v_ego:.1f} vT={self.long.last_v_target:.1f} "
+                f"aT={self.long.last_a_target:+.2f} "
+                f"lanes={np.round(decoded.lane_lines_prob, 2).tolist()} "
+                f"leadP={float(decoded.lead_prob[0]):.2f} "
+                f"desire_state={np.round(decoded.desire_state, 2).tolist()}")
+        if self._snap_req:
+            self._snap_req = False
+            self.incident_note = (
+                f"SNAP v={v_ego:.1f} vT={self.long.last_v_target:.1f} "
                 f"aT={self.long.last_a_target:+.2f} "
                 f"lanes={np.round(decoded.lane_lines_prob, 2).tolist()} "
                 f"leadP={float(decoded.lead_prob[0]):.2f} "
