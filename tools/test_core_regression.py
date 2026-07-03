@@ -77,20 +77,16 @@ def test_fb_integrator_gate():
           f"drift={drift:.3f}")
 
 
-def test_road_lost():
-    cfg = ControllerConfig()
-    lc = LongitudinalController(cfg)
-    lc.road_lost = True
+def test_no_vision_intervention():
+    # The lost-road stop was removed by design (2026-07-02): like real
+    # openpilot, low lane confidence must NOT touch longitudinal — the
+    # controller has no such state at all.
+    lc = LongitudinalController(ControllerConfig())
+    check("controller has no road_lost intervention",
+          not hasattr(lc, "road_lost"))
     lc.compute(mk(15.0), 15.0, mode="exp")
-    check("road_lost hold forces stop plan", lc.last_v_target == 0.0)
-    lc.road_lost_crawl = True
-    lc.compute(mk(0.0), 0.0, mode="exp")
-    check("road_lost crawl targets recovery-creep speed",
-          abs(lc.last_v_target - cfg.road_lost_crawl_mps) < 0.01,
-          f"vT={lc.last_v_target:.2f}")
-    lc.reset()
-    check("reset clears road_lost + crawl",
-          not lc.road_lost and not lc.road_lost_crawl)
+    check("plan followed regardless of vision confidence",
+          lc.last_v_target > 14.0)
 
 
 def test_curvature_clip():
@@ -135,7 +131,7 @@ def test_min_stable_delay():
 if __name__ == "__main__":
     test_turn_governor()
     test_fb_integrator_gate()
-    test_road_lost()
+    test_no_vision_intervention()
     test_curvature_clip()
     test_min_stable_delay()
     print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILURES: {FAILS}'}")
