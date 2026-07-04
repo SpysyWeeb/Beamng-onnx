@@ -64,7 +64,9 @@ free beamngpy.
 - **M1 — model sees BeamNG** ✅ verified warp geometry (vx ratio 0.995,
   yaw 1.028, lane width 3.82 m); lane probs peak ~1.0 driving.
 - **M2 — solid 20 Hz loop** ✅ shared-memory frame streaming
-  (0.13 ms/frame); GPU pipeline ~6 ms/step on RDNA4 (gfx1201).
+  (0.13 ms/frame); ~26 ms/step full pipeline on CPU (measured, Windows
+  11 laptop — the 50 ms budget holds with room to spare; DirectML
+  drops it further).
 - **M3 — closed loop** ✅ lateral + end-to-end longitudinal, extensively
   tuned against real openpilot behavior (see *The control stack* and
   *What we learned*).
@@ -100,7 +102,9 @@ py -3.12 -m venv .venv
 `requirements.txt` is complete: numpy, opencv, beamngpy, onnxruntime,
 plus `dearpygui` (the UIs). Hybrid-mode window capture uses the Win32
 API directly (ctypes) — no extra package. CPU inference runs the whole
-pipeline at ~60 Hz, so this alone is enough to drive — no GPU setup.
+pipeline at ~40 Hz (measured on a midrange laptop), comfortably above
+the 20 Hz the model needs — so this alone is enough to drive, no GPU
+setup.
 
 **3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. Any recent
 version; you do **not** need a `tech.key` (hybrid mode covers that). The
@@ -163,7 +167,7 @@ the file through the GitLab LFS `objects/batch` API.
 
 ### GPU acceleration (optional)
 
-CPU is the default and is plenty (~60 Hz). On Windows the GPU path is
+CPU is the default and is plenty (~2x the needed rate). The GPU path is
 **DirectML** — one package swap, works on any DX12 GPU (AMD, NVIDIA,
 Intel):
 
@@ -185,8 +189,10 @@ branch's README.)
 **Easiest path — the start panel:**
 
 ```bat
-start.bat           # (or: .venv\Scripts\python tools\start_panel.py)
+start.bat
 ```
+
+(equivalently: `.venv\Scripts\python tools\start_panel.py`)
 
 It auto-detects your BeamNG install and tech.key (looked for in the
 install dir — the root and next to the `Bin64` exe) and reshapes
@@ -211,15 +217,22 @@ to `debug_out/control_panel_last.log`.
 **Manual pieces** (`python` = `.venv\Scripts\python`):
 
 ```bat
-launch_beamng.bat                           :: BeamNG + tech server
+:: BeamNG + tech server
+launch_beamng.bat
 
-python tools/control_panel.py               :: tech mode, scripted west_coast_usa
-python tools/control_panel.py --attach      :: hook the car already in-game
-python tools/control_panel.py --hybrid --fov 100  :: no-key: beamngpy + screen camera
-python tools/control_panel.py --model models/big_driving_supercombo.onnx
-python tools/control_panel.py --split --vision <v.onnx> --policy <p.onnx>
-python tools/control_panel.py --classic     :: legacy hand-drawn cv2 UI
-python tools/live_view.py --supercombo      :: overlay viewer; drive manually
+:: tech mode, scripted west_coast_usa
+python tools\control_panel.py
+:: hook the car already in-game
+python tools\control_panel.py --attach
+:: no-key: beamngpy + screen camera
+python tools\control_panel.py --hybrid --fov 100
+:: pick a model / split pair
+python tools\control_panel.py --model models\big_driving_supercombo.onnx
+python tools\control_panel.py --split --vision <v.onnx> --policy <p.onnx>
+:: legacy hand-drawn cv2 UI
+python tools\control_panel.py --classic
+:: overlay viewer; drive manually
+python tools\live_view.py --supercombo
 ```
 
 **Controls** (panel buttons or keys): `e` engage · `l` long-mode cycle
