@@ -104,8 +104,11 @@ version; you do **not** need a `tech.key` (hybrid mode covers that). The
 start panel auto-detects the common Steam paths, or you type the install
 directory in.
 
-**4. Models** — comma's weights aren't in the repo; drop `.onnx` files
-into `models/` (see *Models* below).
+**4. Models** — the driving models **ship with the repo** under
+`models/supercombo/` and `models/split/`, so there's nothing to fetch
+for a normal setup. The one exception is the 1.76 GB *big* model, which
+is too large for GitHub — grab it separately only if you want it (see
+*Models* below).
 
 **5. Run:**
 
@@ -116,37 +119,37 @@ into `models/` (see *Models* below).
 Pick your options and press **START**. On CPU that's the entire install
 — no container, no GPU setup.
 
-### Models (not in the repo)
+### Models
 
-Drop the ONNX files in `models/`. Filenames use a **name-first**
-convention, `<NAME>_driving_<type>.onnx`, so the release/experiment name
-sorts to the front:
+Models live in two typed folders, and the start panel reads each one:
 
-- **Supercombo** (openpilot master, a single file) — e.g.
-  `CD210_driving_supercombo.onnx`, `big_driving_supercombo.onnx`,
-  `Deep_rl3_driving_supercombo.onnx`, `Toby_rl_driving_supercombo.onnx`.
-- **Split pair** (openpilot 0.11.x) — a matched
+- **`models/supercombo/`** — single-file supercombo models (openpilot
+  master): `CD210_driving_supercombo.onnx`, `Deep_rl3_driving_supercombo
+  .onnx`, `Toby_rl_driving_supercombo.onnx` (and, if you fetch it,
+  `big_driving_supercombo.onnx`).
+- **`models/split/`** — matched vision + policy pairs (openpilot 0.11.x):
   `<NAME>_driving_vision.onnx` + `<NAME>_driving_policy.onnx` (e.g.
-  `POP_driving_vision.onnx` / `POP_driving_policy.onnx`). The start
-  panel's **Link** toggle (between the two dropdowns) keeps them on the
-  same name; the halves are trained together, so mixing names usually
-  won't run.
+  `POP_driving_vision.onnx` / `POP_driving_policy.onnx`, plus the base
+  `driving_vision.onnx` / `driving_policy.onnx`).
 
-Output layout is read from each file's own metadata, so checkpoint swaps
-need no code changes. The default resolver globs
-`*driving_supercombo*.onnx`, and the start panel can browse to any
-`.onnx`.
+Filenames use a **name-first** convention, `<NAME>_driving_<type>.onnx`,
+so the release/experiment name sorts to the front. In the start panel the
+**Link** toggle (between the vision/policy dropdowns) keeps the pair on
+the same name — the halves are trained together, so mixing names usually
+won't run. Output layout is read from each file's own metadata, so
+checkpoint swaps need no code changes, and you can browse to any `.onnx`.
 
-- **Big model** (`big_driving_supercombo.onnx`, comma's USB-eGPU model,
-  1.76 GB) is the only one with a real **action head** (a trained,
-  smoothed accel/curvature output). It needs the game's graphics turned
-  down enough to hold 20 Hz, or its temporal buffers time-warp. The
-  smaller supercombos (CD210, Deep_rl3, Toby_rl) hold 20 Hz easily.
+The seven smaller models are committed to the repo. The **big model**
+(`big_driving_supercombo.onnx`, comma's USB-eGPU model, **1.76 GB**) is
+*not* — it's over GitHub's 100 MB/file limit, so fetch it separately into
+`models/supercombo/` if you want it. It's the only one with a real
+**action head** (a trained, smoothed accel/curvature output) but needs
+the game's graphics turned down to hold 20 Hz; the smaller supercombos
+(CD210, Deep_rl3, Toby_rl) hold 20 Hz easily.
 
-comma's model weights are **not in this repo**. Their LFS lives on
-GitLab (`gitlab.com/commaai/openpilot-lfs`), not GitHub — pull the
-pointer from `raw.githubusercontent`, then resolve the actual file
-through the GitLab LFS `objects/batch` API.
+comma's weights come from **GitLab** (`gitlab.com/commaai/openpilot-lfs`),
+not GitHub — pull the pointer from `raw.githubusercontent`, then resolve
+the file through the GitLab LFS `objects/batch` API.
 
 ### GPU acceleration (optional) — and the distrobox
 

@@ -6,7 +6,11 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# Models (large, fetch separately)
+# Models: the small ones ship in the repo under models/supercombo/ and
+# models/split/. The big model is 1.76 GB — over GitHub's 100 MB/file
+# limit — so it's excluded and fetched separately.
+models/supercombo/big_driving_supercombo.onnx
+# stray flat/legacy model files (real ones live in the subfolders) + non-onnx
 models/*.onnx
 models/*.pkl
 models/*.thneed

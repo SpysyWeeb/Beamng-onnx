@@ -29,8 +29,8 @@ from simsteer.core.constants import (
 )
 from simsteer.paths import model_path
 
-VISION_PATH = model_path("driving_vision.onnx")
-POLICY_PATH = model_path("driving_policy.onnx")
+VISION_PATH = model_path("split/driving_vision.onnx")
+POLICY_PATH = model_path("split/driving_policy.onnx")
 
 
 def _make_session(path: Path, providers: list[str],

@@ -19,8 +19,8 @@ import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = [
-    ROOT / "models" / "driving_vision.onnx",
-    ROOT / "models" / "driving_policy.onnx",
+    ROOT / "models" / "split" / "driving_vision.onnx",
+    ROOT / "models" / "split" / "driving_policy.onnx",
 ]
 
 

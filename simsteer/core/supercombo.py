@@ -50,7 +50,7 @@ from simsteer.core.postprocess import (
 )
 from simsteer.paths import model_path
 
-SUPERCOMBO_PATH = model_path("driving_supercombo.onnx")
+SUPERCOMBO_PATH = model_path("supercombo/driving_supercombo.onnx")
 
 
 def _default_supercombo():

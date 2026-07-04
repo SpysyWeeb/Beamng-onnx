@@ -24,7 +24,8 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "launcher_beamng.json")
 TECH_PORT = 64256
-DEFAULT_MODEL = os.path.join(ROOT, "models", "driving_supercombo.onnx")
+DEFAULT_MODEL = os.path.join(ROOT, "models", "supercombo",
+                             "driving_supercombo.onnx")
 
 STEAM_CANDIDATES = [
     "~/.local/share/Steam/steamapps/common/BeamNG.drive",
@@ -73,8 +74,10 @@ def scan_levels(install: str) -> list[str]:
     return ["west_coast_usa"] + levels
 
 
-def _scan(pred) -> list[str]:
-    d = os.path.join(ROOT, "models")
+def _scan(subdir: str, pred=lambda f: True) -> list[str]:
+    # Models live in typed subfolders: models/supercombo/ and
+    # models/split/. Scan one, filtered by `pred`.
+    d = os.path.join(ROOT, "models", subdir)
     out = []
     if os.path.isdir(d):
         for f in sorted(os.listdir(d), key=str.lower):
@@ -84,19 +87,16 @@ def _scan(pred) -> list[str]:
 
 
 def scan_models() -> list[str]:
-    # Supercombo = anything that isn't a split half. Substring (not
-    # prefix) match so the name-first convention works too:
-    # <NAME>_driving_<type>.onnx, e.g. CD210_driving_supercombo.onnx.
-    out = _scan(lambda f: "driving_vision" not in f
-                and "driving_policy" not in f)
-    return out or [DEFAULT_MODEL]
+    # models/supercombo/ holds the single-file supercombo models.
+    return _scan("supercombo") or [DEFAULT_MODEL]
 
 
 def scan_split(kind: str) -> list[str]:
-    # kind is "vision" or "policy"; match the type anywhere in the name
-    # so both driving_vision_POP.onnx and POP_driving_vision.onnx hit.
+    # models/split/ holds matched vision + policy pairs; kind is
+    # "vision" or "policy", matched anywhere in the name so both
+    # driving_vision_POP.onnx and POP_driving_vision.onnx hit.
     key = f"driving_{kind}"
-    return _scan(lambda f: key in f)
+    return _scan("split", lambda f: key in f)
 
 
 def model_name(path: str) -> str:

@@ -1462,7 +1462,7 @@ def main() -> int:
                          "to the player's car (known model) on click")
     ap.add_argument("--model", default=None,
                     help="path to a supercombo-compatible .onnx "
-                         "(default: models/driving_supercombo.onnx)")
+                         "(default: models/supercombo/driving_supercombo.onnx)")
     ap.add_argument("--traffic", type=int, default=0,
                     help="spawn N game-managed AI traffic vehicles")
     ap.add_argument("--vision", default=None,
