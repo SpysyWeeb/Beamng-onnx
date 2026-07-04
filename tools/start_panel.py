@@ -87,8 +87,13 @@ class StartView:
     def _refresh_visibility(self):
         tech = self.c.tech_key
         split = self.c.arch == "split"
-        for tag in ("grp_path", "grp_map", "grp_vehicle", "grp_traffic"):
-            dpg.configure_item(tag, show=tech)
+        fr = self.c.freeroam
+        dpg.configure_item("grp_path", show=tech)
+        dpg.configure_item("grp_freeroam", show=tech)
+        # map/vehicle/traffic don't matter in freeroam — you load the map
+        # and spawn/LINK your own car in-game.
+        for tag in ("grp_map", "grp_vehicle", "grp_traffic"):
+            dpg.configure_item(tag, show=tech and not fr)
         dpg.configure_item("grp_fov", show=not tech)
         dpg.configure_item("grp_super", show=not split)
         dpg.configure_item("grp_split", show=split)
@@ -133,16 +138,18 @@ class StartView:
                 dpg.add_text("BeamNG install")
                 dpg.add_input_text(default_value=self.c.path, width=-1,
                                    callback=self._set("path"))
-            # tech-only: map
+            # tech-only: freeroam toggle (hides map/vehicle when on)
+            with dpg.group(tag="grp_freeroam"):
+                dpg.add_checkbox(
+                    label="Freeroam — spawn your own car, LINK on START "
+                          "(keeps Tab/reset; drive a lead car)",
+                    default_value=self.c.freeroam,
+                    callback=self._set("freeroam"))
+            # tech-only, non-freeroam: map
             with dpg.group(tag="grp_map"):
                 dpg.add_text("Map")
                 dpg.add_combo(self.c.levels, default_value=self.c.map,
                               width=-1, callback=self._set("map"))
-                dpg.add_checkbox(
-                    label="Freeroam — you spawn/drive cars, model attaches "
-                          "on START (keeps Tab/reset; use LINK to re-bind)",
-                    default_value=self.c.freeroam,
-                    callback=self._set("freeroam"))
             # tech-only: vehicle
             with dpg.group(tag="grp_vehicle"):
                 dpg.add_text("Vehicle")

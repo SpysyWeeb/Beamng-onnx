@@ -372,6 +372,9 @@ class App:
         self._game_key = ("beamng" if vehicle == "bastion"
                           else f"beamng-{vehicle}")
         self.screen_mode = bool(getattr(args, "screen", False))
+        # Freeroam gate: locked until the user LINKs to a known car.
+        self._freeroam = False
+        self._linked = True
         self._vision_v = 0.0
         if self.screen_mode:
             # No-tech.key mode: game-window capture + virtual wheel,
@@ -396,12 +399,15 @@ class App:
                                      height_m=self._cam_height,
                                      lateral_sign=CAM_LATERAL_SIGN)
             # World FIRST, GPU session second (RDNA4 level-load rule).
+            self._freeroam = bool(getattr(args, "freeroam", False))
             self.world = BeamNGOnnxWorld(
                 map_name=getattr(args, "map", None) or "west_coast_usa",
                 vehicle_model=getattr(args, "vehicle", None) or "bastion",
-                attach=bool(getattr(args, "attach", False)))
+                attach=self._freeroam or bool(getattr(args, "attach", False)),
+                defer=self._freeroam)
+            self._linked = not self._freeroam   # gated until LINK
             n_traffic = int(getattr(args, "traffic", 0) or 0)
-            if n_traffic > 0:
+            if n_traffic > 0 and self._linked:
                 self.world.spawn_traffic(n_traffic)
 
         # per-game config: CAL persists the measured lookahead here.
@@ -548,6 +554,8 @@ class App:
         print(f"[panel] {text}", flush=True)
 
     def engage_allowed(self) -> tuple[bool, str]:
+        if not self._linked:
+            return False, "not linked — click LINK to bind to your car"
         if self.frame_idx < WARMUP_FRAMES:
             return False, f"model warming up ({self.frame_idx}/{WARMUP_FRAMES})"
         if self.screen_mode:
@@ -640,10 +648,8 @@ class App:
             self.queue = FrameQueue()
             self.lat.reset()
             self.long.reset()
-            known = model in ("bastion", "pickup")
-            self.set_banner(
-                f"linked to {model}" + ("" if known else " (uncalibrated)"),
-                4.0)
+            self._linked = True          # unblur the panel
+            self.set_banner(f"linked to {model} — ready to engage", 4.0)
         elif key == "long":
             order = ["exp", "chill", "off"]
             self.long_mode = order[(order.index(self.long_mode) + 1) % 3]
@@ -1436,6 +1442,10 @@ def main() -> int:
                     help="hook the vehicle already loaded in-game "
                          "(Freeroam interception) instead of spawning "
                          "our scenario")
+    ap.add_argument("--freeroam", action="store_true",
+                    help="freeroam gate: connect but don't attach; the "
+                         "panel opens locked with a LINK button and binds "
+                         "to the player's car (known model) on click")
     ap.add_argument("--model", default=None,
                     help="path to a supercombo-compatible .onnx "
                          "(default: models/driving_supercombo.onnx)")

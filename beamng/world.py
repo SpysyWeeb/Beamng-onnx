@@ -93,7 +93,7 @@ def fov_v_deg(fov_h_deg: float, w: int, h: int) -> float:
 class BeamNGOnnxWorld:
     def __init__(self, host: str = HOST, port: int = PORT,
                  map_name: str = MAP, vehicle_model: str = VEHICLE_MODEL,
-                 attach: bool = False):
+                 attach: bool = False, defer: bool = False):
         """attach=False: build our scripted scenario (spawn coordinates
         are per-map; only west_coast_usa ships them). attach=True:
         FREEROAM INTERCEPTION — hook whatever the player already
@@ -126,6 +126,16 @@ class BeamNGOnnxWorld:
                 print(f"[world] BeamNG not ready yet, retrying "
                       f"({attempt + 1}/5) ...", flush=True)
                 _t.sleep(3.0)
+
+        if defer:
+            # Freeroam gate: connected to BeamNG, but no vehicle/camera
+            # yet. The panel opens locked with a LINK button; relink()
+            # binds to the player's car once they spawn one.
+            self.vehicle = None
+            self.camera = None
+            print("[world] connected — deferred, waiting for LINK.",
+                  flush=True)
+            return
 
         if attach:
             sc = self.bng.scenario.get_current(connect=False)
@@ -197,8 +207,13 @@ class BeamNGOnnxWorld:
             raise RuntimeError(f"player vehicle {vid!r} not in session")
         new_veh = vehicles[vid]
         model = getattr(new_veh, "model", "") or "?"
-        # Adopt that model's mount/geometry (falls back to bastion).
-        spec = VEHICLE_SPECS.get(model, VEHICLE_SPECS["bastion"])
+        # Require a KNOWN camera profile — we can only drive a car whose
+        # mount/wheelbase we've measured.
+        if model not in VEHICLE_SPECS:
+            raise RuntimeError(
+                f"no camera profile for {model!r} — spawn a "
+                f"{'/'.join(VEHICLE_SPECS)} and try again")
+        spec = VEHICLE_SPECS[model]
         self.cam_pos = spec["cam_pos"]
         self.cam_height_m = spec["cam_height_m"]
         self.wheelbase_m = spec["wheelbase_m"]
@@ -251,6 +266,11 @@ class BeamNGOnnxWorld:
         input (-1..1), and world heading (rad, CCW+) from Electrics +
         vehicle state. One TCP round-trip (~few ms) — poll from a side
         thread, not the 20 Hz model loop."""
+        if self.vehicle is None:      # deferred: not linked yet
+            return {"roll_glat": 0.0, "v_ego": 0.0, "steering_deg": 0.0,
+                    "steering_input": 0.0, "throttle_input": 0.0,
+                    "brake_input": 0.0, "heading_rad": 0.0,
+                    "pos": (0.0, 0.0, 0.0)}
         with self._ctl_lock:
             self.vehicle.sensors.poll()
         el = self.vehicle.sensors["electrics"]

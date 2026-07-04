@@ -260,17 +260,24 @@ class LauncherCore:
         self.log("BeamNG is ready.")
 
         attach = self.freeroam or self.map != "west_coast_usa"
-        if attach and not self._probe_attach():
+        # Freeroam opens the panel LOCKED (no car needed yet) — the user
+        # spawns a car and clicks LINK. Only the non-freeroam attach path
+        # needs a car already present, so probe there.
+        if attach and not self.freeroam and not self._probe_attach():
             return
         args = ["--map", self.map, "--vehicle", self.vehicle]
-        if attach:
+        if self.freeroam:
+            args.append("--freeroam")
+        elif attach:
             args.append("--attach")
         if not self._model_args(args):
             return
-        if self.traffic > 0:
+        if self.traffic > 0 and not self.freeroam:
             args += ["--traffic", str(self.traffic)]
         self._spawn_panel(args)
-        self.log("control panel launching — its window appears once the "
+        self.log("control panel launching — LINK your car once it opens."
+                 if self.freeroam else
+                 "control panel launching — its window appears once the "
                  "scenario loads.")
 
     def _wait_ready(self, timeout_s: float = 180.0) -> bool:

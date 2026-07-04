@@ -310,8 +310,40 @@ class ControlView:
         dpg.show_viewport()
         dpg.set_primary_window("root", True)
 
+        # Freeroam gate: a dim overlay with a single LINK button covering
+        # the (blurred-looking) panel until the model is bound to a car.
+        vw, vh = cw + 24, ch + 430
+        with dpg.window(tag="link_gate", no_title_bar=True, no_move=True,
+                        no_resize=True, no_scrollbar=True, no_collapse=True,
+                        width=vw, height=vh, pos=(0, 0),
+                        show=not self.app._linked):
+            dpg.add_spacer(height=vh // 2 - 90)
+            with dpg.group(horizontal=True):
+                dpg.add_spacer(width=vw // 2 - 130)
+                dpg.add_button(label="LINK", width=260, height=100,
+                               callback=self._act("link"))
+            dpg.add_spacer(height=14)
+            with dpg.group(horizontal=True):
+                dpg.add_spacer(width=max(0, vw // 2 - 230))
+                dpg.add_text("get in your car (bastion or pickup), then "
+                             "click LINK to bind the model",
+                             tag="link_hint", color=(180, 190, 200))
+        with dpg.theme() as gate_theme:
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (8, 10, 14, 232))
+        dpg.bind_item_theme("link_gate", gate_theme)
+
     def _update(self):
         app = self.app
+        # freeroam gate: drop the overlay the moment the car is linked;
+        # surface link feedback on it (the banner is behind the overlay)
+        if dpg.does_item_exist("link_gate"):
+            dpg.configure_item("link_gate", show=not app._linked)
+            if not app._linked and dpg.does_item_exist("link_hint"):
+                dpg.set_value("link_hint",
+                              app.banner if time.monotonic() < app.banner_until
+                              else "get in your car (bastion or pickup), "
+                                   "then click LINK to bind the model")
         if self.eng.rgba is not None:
             dpg.set_value("cam_tex", self.eng.rgba.flatten())
         # banner
