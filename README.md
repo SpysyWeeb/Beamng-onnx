@@ -1,5 +1,9 @@
 # Beamng-onnx
 
+[![Demo video: openpilot's driving model driving in BeamNG](https://img.youtube.com/vi/7T9n35IhuD8/maxresdefault.jpg)](https://youtu.be/7T9n35IhuD8)
+
+*▶ Click to watch the demo on YouTube*
+
 Drive **BeamNG** with comma.ai's openpilot driving models — no
 openpilot install, just the ONNX files and onnxruntime. The model
 steers and works the pedals end-to-end; you watch it drive.
