@@ -165,7 +165,8 @@ class Telemetry(threading.Thread):
 
 MOD_PORT = 64257
 MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
-            "cal", "ai", "spd_dn", "spd_up", "cam", "snap", "gas", "brake"}
+            "cal", "ai", "spd_dn", "spd_up", "cam", "snap", "gas", "brake",
+            "link"}
 
 
 class ControlSender(threading.Thread):
@@ -615,6 +616,34 @@ class App:
             else:
                 self._manual_brake_until = now + 0.35
                 self._manual_gas_until = 0.0
+        elif key == "link":
+            # Bind the model to the player's currently-focused car (drive
+            # into the onnx car and click LINK). Freeroam/attach only.
+            if self.screen_mode or not getattr(self.world, "attached", False):
+                self.set_banner("LINK needs freeroam/attach mode (tech.key)")
+                return
+            if self.engaged:
+                self.disengage("re-link")
+            try:
+                vid, model = self.world.relink()
+            except Exception as exc:
+                self.set_banner(f"link failed: {exc}")
+                return
+            # adopt the linked car's geometry + reset perception/control
+            self.wheelbase = self.world.wheelbase_m
+            self._cam_height = self.world.cam_height_m
+            self.cfg.wheelbase_m = self.wheelbase
+            self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
+                                     fov_h_deg=CAM_FOV_H_DEG,
+                                     height_m=self._cam_height,
+                                     lateral_sign=CAM_LATERAL_SIGN)
+            self.queue = FrameQueue()
+            self.lat.reset()
+            self.long.reset()
+            known = model in ("bastion", "pickup")
+            self.set_banner(
+                f"linked to {model}" + ("" if known else " (uncalibrated)"),
+                4.0)
         elif key == "long":
             order = ["exp", "chill", "off"]
             self.long_mode = order[(order.index(self.long_mode) + 1) % 3]

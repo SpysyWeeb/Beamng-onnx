@@ -127,6 +127,10 @@ class LauncherCore:
         if not os.path.isfile(self.model):
             self.model = self.models[0]
         self.traffic = max(0, min(12, int(cfg.get("traffic", 0))))
+        # Freeroam: attach to a car YOU spawn (native controls kept — Tab,
+        # reset, spawning a lead car all work) instead of the scripted
+        # scenario. Forces attach mode even for west_coast_usa.
+        self.freeroam = bool(cfg.get("freeroam", False))
         self.arch = cfg.get("arch", "supercombo")
         if self.arch not in ("supercombo", "split"):
             self.arch = "supercombo"
@@ -151,6 +155,7 @@ class LauncherCore:
         data = {"beamng_path": self.path, "tech_key": self.tech_key,
                 "map": self.map, "vehicle": self.vehicle,
                 "model": self.model, "traffic": self.traffic,
+                "freeroam": self.freeroam,
                 "arch": self.arch, "vision_model": self.vision_model,
                 "policy_model": self.policy_model,
                 "screen_fov": self.screen_fov}
@@ -254,7 +259,7 @@ class LauncherCore:
             return
         self.log("BeamNG is ready.")
 
-        attach = self.map != "west_coast_usa"
+        attach = self.freeroam or self.map != "west_coast_usa"
         if attach and not self._probe_attach():
             return
         args = ["--map", self.map, "--vehicle", self.vehicle]

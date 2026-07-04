@@ -138,6 +138,11 @@ class StartView:
                 dpg.add_text("Map")
                 dpg.add_combo(self.c.levels, default_value=self.c.map,
                               width=-1, callback=self._set("map"))
+                dpg.add_checkbox(
+                    label="Freeroam — you spawn/drive cars, model attaches "
+                          "on START (keeps Tab/reset; use LINK to re-bind)",
+                    default_value=self.c.freeroam,
+                    callback=self._set("freeroam"))
             # tech-only: vehicle
             with dpg.group(tag="grp_vehicle"):
                 dpg.add_text("Vehicle")

@@ -160,7 +160,15 @@ class BeamNGOnnxWorld:
             self.bng.scenario.start()
             self.vehicle.sensors.attach("electrics", Electrics())
 
-        self.camera = Camera(
+        self.camera = self._make_camera()
+        print("[world] scenario live, camera attached (shmem streaming).",
+              flush=True)
+
+    def _make_camera(self) -> Camera:
+        """(Re)create the onnx camera on the current self.vehicle at the
+        current per-vehicle mount. Named 'onnxcam' — call camera.remove()
+        on the old one before making a new one on a different vehicle."""
+        return Camera(
             "onnxcam", self.bng, self.vehicle,
             requested_update_time=0.05,  # 20 Hz — never render more than we consume
             pos=self.cam_pos, dir=CAM_DIR, up=(0, 0, 1),
@@ -175,8 +183,41 @@ class BeamNGOnnxWorld:
             is_streaming=True,
             is_using_shared_memory=True,
         )
-        print("[world] scenario live, camera attached (shmem streaming).",
-              flush=True)
+
+    def relink(self) -> tuple[str, str]:
+        """Re-bind the model to the PLAYER's currently-focused vehicle
+        (the car the driver is sitting in). Tears down the camera, points
+        it at the new vehicle at that model's mount, and re-attaches
+        telemetry. Returns (vid, model). Freeroam/attach only — the
+        model drives whatever car you link, you keep the rest."""
+        pid = self.bng.vehicles.get_player_vehicle_id()   # {'id','vid'}
+        vid = pid["vid"]
+        vehicles = self.bng.vehicles.get_current(include_config=False)
+        if vid not in vehicles:
+            raise RuntimeError(f"player vehicle {vid!r} not in session")
+        new_veh = vehicles[vid]
+        model = getattr(new_veh, "model", "") or "?"
+        # Adopt that model's mount/geometry (falls back to bastion).
+        spec = VEHICLE_SPECS.get(model, VEHICLE_SPECS["bastion"])
+        self.cam_pos = spec["cam_pos"]
+        self.cam_height_m = spec["cam_height_m"]
+        self.wheelbase_m = spec["wheelbase_m"]
+        # Swap the camera onto the new vehicle under the poll lock so the
+        # frame thread never touches a half-removed sensor.
+        with self._ctl_lock:
+            old_cam = self.camera
+            self.camera = None
+            try:
+                old_cam.remove()
+            except Exception:
+                pass
+            self.vehicle = new_veh
+            self.vehicle.sensors.attach("electrics", Electrics())
+            self.vehicle.connect(self.bng)
+            self.camera = self._make_camera()
+        print(f"[world] re-linked to {vid!r} ({model}); "
+              f"mount {self.cam_pos} wb {self.wheelbase_m}", flush=True)
+        return vid, model
 
     # ---- frames ----
 
@@ -187,7 +228,11 @@ class BeamNGOnnxWorld:
         12 ms for stream()/poll(). cvtColor both drops alpha and swaps
         RGB->BGR (simsteer's pipeline is cv2 land) in one SIMD pass.
         """
-        raw = self.camera.stream_raw()
+        with self._ctl_lock:
+            cam = self.camera
+            if cam is None:
+                return None
+            raw = cam.stream_raw()
         buf = raw.get("colour") if isinstance(raw, dict) else None
         if buf is None or len(buf) == 0:
             return None

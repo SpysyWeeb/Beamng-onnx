@@ -293,6 +293,8 @@ class ControlView:
                                callback=self._act("cam"))
                 dpg.add_button(label="AI", width=80, height=40,
                                callback=self._act("ai"))
+                dpg.add_button(label="LINK", width=90, height=40,
+                               callback=self._act("link"))
             with dpg.group(horizontal=True):
                 for lab, cmd in (("< LANE", "lane_l"), ("LANE >", "lane_r"),
                                  ("< TURN", "turn_l"), ("TURN >", "turn_r"),
