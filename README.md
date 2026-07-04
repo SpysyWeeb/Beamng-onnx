@@ -76,6 +76,10 @@ free beamngpy.
 
 ## How to install
 
+From nothing to driving on **CPU** (a GPU is optional — see *GPU
+acceleration* below). This works on any Linux distro, immutable ones
+included, with no container.
+
 **1. Clone** the Linux fork (it lives on the `linux` branch):
 
 ```bash
@@ -83,45 +87,34 @@ git clone -b linux https://github.com/SpysyWeeb/Beamng-onnx
 cd Beamng-onnx
 ```
 
-**2. Python 3.12 environment:**
+**2. Python 3.12 environment + dependencies:**
 
 ```bash
-uv venv .venv --python 3.12          # or: python3 -m venv .venv
+uv venv .venv --python 3.12          # or: python3.12 -m venv .venv
 uv pip install -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
 ```
 
-CPU inference already runs the whole pipeline at ~60 Hz, so a GPU is
-optional (see ROCm below). Beyond numpy / opencv / onnxruntime, the
-notable deps are `python-xlib` (hybrid-mode window capture) and
-`dearpygui` (the start/control-panel UIs) — both in `requirements.txt`.
+`requirements.txt` is complete: numpy, opencv, beamngpy, onnxruntime,
+plus `dearpygui` (the UIs) and `python-xlib` (hybrid-mode capture). CPU
+inference runs the whole pipeline at ~60 Hz, so this alone is enough to
+drive — no GPU, no container.
 
-**3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. The start
-panel auto-detects the common Steam paths and whether a `tech.key` is
-present; you can also type the install directory in.
+**3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. Any recent
+version; you do **not** need a `tech.key` (hybrid mode covers that). The
+start panel auto-detects the common Steam paths, or you type the install
+directory in.
 
-**4. Models** — drop the ONNX files in `models/` (see *Models* below).
+**4. Models** — comma's weights aren't in the repo; drop `.onnx` files
+into `models/` (see *Models* below).
 
-**5. Run** `./start.sh` and press START.
+**5. Run:**
 
-### Why a distrobox — and when you don't need one
+```bash
+./start.sh
+```
 
-This branch was developed on **Bazzite** (an immutable, atomic Fedora
-variant) where you can't just install the ROCm libraries onto the host
-system. The fix is a [distrobox](https://distrobox.it/) — a mutable
-container that shares your home directory — with ROCm and the Python
-venv inside it. **The game always runs on the host; only the control
-panel runs in the container**, talking to BeamNG over the local
-beamngpy socket. On this machine the start panel launches the panel with
-a `distrobox enter …` prefix, stored in `launcher_beamng.json` as
-`panel_cmd_prefix`.
-
-**If your distro is *not* immutable** (Ubuntu, Arch, regular Fedora, …)
-you don't need any of this. Install Python — and, if you want GPU,
-ROCm — straight onto the host, create the venv normally, and just run
-`./start.sh`. Make sure `launcher_beamng.json` has **no**
-`panel_cmd_prefix` key (delete it if present) so the panel runs on the
-host too. Nothing in the code requires the container — it's purely a
-packaging convenience for immutable systems.
+Pick your options and press **START**. On CPU that's the entire install
+— no container, no GPU setup.
 
 ### Models (not in the repo)
 
@@ -155,13 +148,58 @@ GitLab (`gitlab.com/commaai/openpilot-lfs`), not GitHub — pull the
 pointer from `raw.githubusercontent`, then resolve the actual file
 through the GitLab LFS `objects/batch` API.
 
-### ROCm (optional, AMD GPUs)
+### GPU acceleration (optional) — and the distrobox
 
-`onnxruntime-rocm` from PyPI plus the ROCm 6.4 runtime libs
-(`hipblas rocblas miopen-hip hip-runtime-amd hipfft hipsparse hiprand
-rocrand rccl roctracer hipsolver rocsolver rocfft` from
-repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
-&& ldconfig`. Falls back to CPU automatically.
+CPU is the default and is plenty (~60 Hz). For AMD-GPU (ROCm)
+acceleration there are two cases:
+
+**On a normal (mutable) distro** — Ubuntu, Arch, regular Fedora, … —
+install ROCm on the host and swap the runtime:
+
+```bash
+uv pip uninstall onnxruntime
+uv pip install onnxruntime-rocm==1.22.2
+```
+
+plus the ROCm 6.4 runtime libs (`hipblas rocblas miopen-hip
+hip-runtime-amd hipfft hipsparse hiprand rocrand rccl roctracer
+hipsolver rocsolver rocfft` from repo.radeon.com), then
+`echo /opt/rocm/lib | sudo tee /etc/ld.so.conf.d/rocm.conf && sudo
+ldconfig`. It falls back to CPU automatically if anything is missing —
+`./start.sh` is unchanged.
+
+**On an immutable/atomic distro** — Bazzite, Silverblue, Kinoite, … —
+you can't install those ROCm libs onto the host, so they go in a
+[distrobox](https://distrobox.it/): a mutable container that shares your
+home directory. **The game and start panel still run on the host; only
+the control panel (the model runner) runs in the container**, talking to
+BeamNG over the local beamngpy socket.
+
+```bash
+# uv keeps Python under ~/.local, so the SAME .venv runs from both the
+# host and the container (they share your home dir)
+uv venv .venv --python 3.12 && uv pip install -r requirements.txt
+
+# a mutable box to hold ROCm + the GPU runtime
+distrobox create --name onnx-runner --image ubuntu:24.04
+distrobox enter onnx-runner
+#   inside: install the ROCm libs above + `uv pip install onnxruntime-rocm`
+exit
+```
+
+Then point the start panel at the box by adding one key to
+`launcher_beamng.json` (created on first run) — this is the *only*
+difference from the host setup:
+
+```json
+"panel_cmd_prefix": ["distrobox", "enter", "onnx-runner", "--", "bash",
+  "-c", "cd ~/Beamng-onnx && exec .venv/bin/python3 tools/control_panel.py \"$@\"", "--"]
+```
+
+**If you run on CPU, or on a mutable distro, ignore all of this** — leave
+`panel_cmd_prefix` unset and everything runs on the host. The distrobox
+is only the intersection of "immutable OS" and "want GPU"; nothing in the
+code requires it.
 
 ## Running
 
@@ -315,10 +353,10 @@ runs frame-by-frame.
 height, wheelbase, and part config, plus per-vehicle state files so one
 vehicle's calibration never bleeds into another's.
 
-- **bastion** — the measured-and-tuned sedan (camera ~1.30 m).
-- **pickup** — Gavril D-Series crew-cab 4×4 automatic, a 2020 Sierra
-  1500 AT4 recreation. Camera at the windshield glass, measured 1.95 m
-  above the road.
+- **bastion (sedan)** — the measured-and-tuned sedan (camera ~1.30 m).
+- **D-Series (truck)** — the Gavril D-Series crew-cab 4×4 automatic
+  (its beamngpy model name is `pickup`). Camera at the windshield
+  glass, measured 1.95 m above the road.
 
 ## Upstream docs
 

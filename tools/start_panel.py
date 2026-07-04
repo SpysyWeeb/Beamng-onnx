@@ -2,12 +2,12 @@
 """Start panel — the front door, rebuilt in dearpygui (crisp fonts,
 GPU widgets) from the hand-drawn cv2 version.
 
-The tech.key checkbox switches the whole form:
-  checked  — tech mode: BeamNG install path, map, vehicle, traffic
-             (beamngpy drives everything).
-  unchecked — screen mode: no map/vehicle/traffic (the player sets
-             those in-game); just the hood-cam FOV. We capture the
-             game window and drive a virtual wheel.
+The tech.key checkbox only changes the CAMERA source (the one
+tech-gated feature); map/vehicle/traffic/freeroam work either way:
+  checked  — tech mode: beamngpy Camera sensor renders the view.
+  unchecked — hybrid mode: same beamngpy scenario + control + real
+             speed, camera from a screen capture (shows the hood-cam
+             FOV field so the warp matches the in-game view).
 
 All state and the launch flow live in tools/launcher_core.py; this
 file is only the view. Run: .venv/bin/python3 tools/start_panel.py
@@ -20,7 +20,8 @@ import time
 import dearpygui.dearpygui as dpg
 
 from launcher_core import (LauncherCore, ROOT, scan_models, scan_split,
-                           detect_tech_key, scan_levels, model_name)
+                           detect_tech_key, scan_levels, model_name,
+                           VEHICLE_LABELS)
 
 BROWSE = "browse..."
 
@@ -60,6 +61,15 @@ class StartView:
             setattr(self.c, field, value)
             self._refresh_visibility()
         return cb
+
+    def _set_vehicle(self, sender, value):
+        # the combo shows display labels ("D-Series (truck)"); store the
+        # beamngpy model-string key ("pickup") that everything spawns on
+        for key, label in VEHICLE_LABELS.items():
+            if label == value:
+                self.c.vehicle = key
+                return
+        self.c.vehicle = value   # already a key (unknown label)
 
     def _pick_model(self, which):
         def cb(sender, value):
@@ -179,11 +189,14 @@ class StartView:
                 dpg.add_text("Map")
                 dpg.add_combo(self.c.levels, default_value=self.c.map,
                               width=-1, callback=self._set("map"))
-            # tech-only: vehicle
+            # tech-only: vehicle (labels shown, model-string keys stored)
             with dpg.group(tag="grp_vehicle"):
                 dpg.add_text("Vehicle")
-                dpg.add_combo(self.c.vehicles, default_value=self.c.vehicle,
-                              width=-1, callback=self._set("vehicle"))
+                dpg.add_combo(
+                    [VEHICLE_LABELS.get(v, v) for v in self.c.vehicles],
+                    default_value=VEHICLE_LABELS.get(self.c.vehicle,
+                                                     self.c.vehicle),
+                    width=-1, callback=self._set_vehicle)
             # tech-only: traffic
             with dpg.group(tag="grp_traffic"):
                 dpg.add_text("Traffic (AI cars)")

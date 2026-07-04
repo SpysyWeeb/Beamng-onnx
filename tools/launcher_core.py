@@ -34,6 +34,10 @@ STEAM_CANDIDATES = [
 UTILITY_LEVELS = {"template", "smallgrid", "autotest", "garage_v2",
                   "showroom_v2"}
 VEHICLES = ["bastion", "pickup"]
+# Display labels for the dropdown. The KEYS stay the beamngpy model
+# strings (spawn + freeroam relink match on them); only the shown text
+# changes. "pickup" is the Gavril D-Series' internal model name.
+VEHICLE_LABELS = {"bastion": "bastion (sedan)", "pickup": "D-Series (truck)"}
 
 
 def detect_beamng() -> str:

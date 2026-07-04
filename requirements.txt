@@ -4,6 +4,8 @@ numpy>=1.26,<2
 opencv-python>=4.10
 beamngpy>=1.35
 onnxruntime>=1.20
+dearpygui>=1.11        # the start panel + control panel UIs
+python-xlib>=0.33      # hybrid (no-tech.key) mode: per-window screen capture
 
 # Optional AMD GPU inference: replace onnxruntime with onnxruntime-rocm
 # (needs the ROCm 6.4 runtime libs — see README "ROCm" section).
