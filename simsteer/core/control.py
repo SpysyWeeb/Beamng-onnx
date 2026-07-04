@@ -153,7 +153,7 @@ class ControllerConfig:
     # curvature we commanded) and nudges the multiplier to drive that
     # ratio to 1.0. Warm-started + persisted per vehicle (a tire/mass
     # property). understeer_learn_rate 0 freezes it (static FF).
-    understeer_ff_init: float = 1.45   # high-speed multiplier warm-start
+    understeer_ff_init: float = 1.2    # neutral-ish warm-start; learned per car
     understeer_cap: float = 1.8
     understeer_v_lo: float = 10.0      # gate floor (FF = 1.0 here)
     understeer_v_hi: float = 22.0      # gate ceiling (full learned FF)
@@ -527,40 +527,47 @@ class LateralController:
 
     def _learn_understeer(self, decoded: Decoded, v_ego: float,
                           in_lane_change: bool) -> None:
-        """Closed-loop understeer FF. On a SUSTAINED high-speed curve,
-        compare the model's achieved curvature (ego yaw-rate / v) to the
-        curvature we commanded and ease the learned multiplier toward
-        the value that makes achieved == commanded. Tightly gated and
-        slow, so noisy pose yaw can't destabilise the steering. Only
-        runs while engaged (compute() is called only when engaged)."""
+        """Closed-loop understeer FF. On a SUSTAINED curve, compare the
+        model's achieved curvature (ego yaw-rate / v = ACT LAT / v^2) to
+        the curvature we commanded (DES LAT / v^2) and ease the learned
+        multiplier toward the value that makes achieved == commanded.
+        Learns wherever the FF is MEANINGFULLY applied (gate weight w),
+        including the 16-20 m/s sweepers where the over-steer actually
+        shows — the partial gate is divided back out so the learned
+        asymptote is correct. Slow + gated so noisy pose yaw can't
+        destabilise steering. Runs only while engaged."""
         cfg = self.cfg
-        if cfg.understeer_learn_rate <= 0.0:
+        if cfg.understeer_learn_rate <= 0.0 or in_lane_change:
             return
-        # Learn only where the gate is essentially full — there the
-        # learned magnitude maps directly to delivery (no partial-gate
-        # ambiguity). Lane changes carry the authority boost + dynamic
-        # maneuver, so exclude them.
-        if v_ego < cfg.understeer_v_hi or in_lane_change:
+        w = float(np.clip(
+            (v_ego - cfg.understeer_v_lo)
+            / max(cfg.understeer_v_hi - cfg.understeer_v_lo, 1e-3),
+            0.0, 1.0))
+        if w < 0.35:                           # need meaningful FF applied
             return
         if len(self._k_recent) < self._k_recent.maxlen:
             return
         ks = [abs(k) for k in self._k_recent]
         kbar = sum(ks) / len(ks)
-        if kbar < 0.004:                       # a real curve, not straight
+        if kbar < 0.003:                       # a real curve, not straight
             return
-        if (max(ks) - min(ks)) > 0.20 * kbar:  # sustained, not a transient
+        if (max(ks) - min(ks)) > max(0.25 * kbar, 0.0015):   # sustained
             return
         k_cmd = self._k_recent[-1]
         k_meas = float(decoded.pose[5]) / max(v_ego, 1.0)
         if k_cmd == 0.0 or (k_meas > 0) != (k_cmd > 0):   # same direction
             return
-        g = k_meas / k_cmd                     # delivery gain
+        g = k_meas / k_cmd                     # delivery gain (ACT/DES)
         if not (0.4 < g < 2.5):                # reject noise/outliers
             return
-        # ease toward the FF that would make delivery 1.0 (ff_new = ff/g)
-        target = self._understeer_ff / g
+        # The FF actually applied this frame is 1 + w*(uff-1); it
+        # produced delivery g. To drive delivery -> 1.0 the applied FF
+        # should be applied/g, so divide the gate back out to update the
+        # asymptote: uff_new = 1 + (applied/g - 1)/w.
+        applied = 1.0 + w * (self._understeer_ff - 1.0)
+        uff_target = 1.0 + (applied / g - 1.0) / w
         self._understeer_ff += cfg.understeer_learn_rate * (
-            target - self._understeer_ff)
+            uff_target - self._understeer_ff)
         self._understeer_ff = float(
             np.clip(self._understeer_ff, 1.0, cfg.understeer_cap))
 

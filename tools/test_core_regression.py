@@ -171,7 +171,7 @@ def test_understeer_ff_gate_and_learn():
     # over-steer) and its magnitude is learned CLOSED-LOOP from delivery.
     from simsteer.core.control import LateralController
     cfg = ControllerConfig()
-    lc = LateralController(cfg)
+    lc = LateralController(cfg, understeer_ff=1.4)
     d = mk(8.0)
     d.plan[:, 11] = [0.5 * t for t in
                      LongitudinalController(ControllerConfig())._T_IDXS]
@@ -182,6 +182,17 @@ def test_understeer_ff_gate_and_learn():
     lc.compute(d, 25.0)
     check("understeer FF boosts at highway speed (25 m/s)",
           lc.last_ff > 1.2, f"ff={lc.last_ff:.3f}")
+
+    # over-delivery at a CURVE speed (18 m/s, partial gate) must lower
+    # the FF — the tunnel-sweeper case the old learner couldn't reach
+    lc = LateralController(cfg, understeer_ff=1.40)
+    d = mk(18.0)
+    d.pose[5] = 1.25 * 0.006 * 18.0      # k_meas = 1.25 * k_cmd (over-steer)
+    lc._k_recent.extend([0.006] * 10)
+    for _ in range(300):
+        lc._learn_understeer(d, 18.0, False)
+    check("over-steer on an 18 m/s sweeper lowers FF (partial gate)",
+          lc.understeer_ff < 1.25, f"ff={lc.understeer_ff:.3f}")
 
     # under-delivery (achieved < commanded) must RAISE the learned FF
     lc = LateralController(cfg, understeer_ff=1.30)
