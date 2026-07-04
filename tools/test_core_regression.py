@@ -151,6 +151,24 @@ def test_curvature_clip():
           0.2 < abs(k_flat) <= 0.35, f"k={k_flat:.3f}")
 
 
+def test_anticipation_cap():
+    # On a fast-tightening curve the 2*avg-cur lead can extrapolate far
+    # past the plan's own curvature (measured 99% over) and cut the car
+    # to the INSIDE. The cap must hold the command to the plan's peak
+    # curvature within the lookahead window.
+    v = 13.0
+    plan = mk(v).plan
+    t_idxs = LongitudinalController(ControllerConfig())._T_IDXS
+    plan[:, 14] = [-(0.010 + 0.10 * t) * v for t in t_idxs]   # yaw_rate
+    plan[:, 11] = np.cumsum(plan[:, 14]) * np.gradient(t_idxs)  # heading
+    peak = float(np.max(np.abs(plan[t_idxs <= 0.45, 14] / v)))
+    k = desired_curvature_lag_adjusted(plan, v, 0.30, extra_buffer_s=0.0,
+                                       last_desired_curvature=-0.05,
+                                       lat_jerk_max_mps3=15.0)
+    check("anticipation lead capped to plan-peak curvature",
+          abs(k) <= peak + 1e-6, f"|k|={abs(k):.4f} peak={peak:.4f}")
+
+
 def test_min_stable_delay():
     # below 0.3 s the heading target must be the scaled stable-point
     # read (master drive_helpers), not a raw interp at a tiny delay
@@ -252,6 +270,7 @@ if __name__ == "__main__":
     test_fb_integrator_gate()
     test_no_vision_intervention()
     test_curvature_clip()
+    test_anticipation_cap()
     test_min_stable_delay()
     test_understeer_ff_gate_and_learn()
     test_action_head_override()

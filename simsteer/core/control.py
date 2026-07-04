@@ -105,13 +105,15 @@ class ControllerConfig:
     # Anticipation buffer added to `lookahead_s` when computing
     # `desired_curvature_lag_adjusted`. Reads the plan's heading at
     # `lookahead_s + curvature_anticipation_s` into the future.
-    # lookahead_s covers the MEASURED response lag (CAL-set); this is
-    # the deliberate turn-in-early preference on top. 0.05 (was 0.0,
-    # 2026-07-02): the car hugged the outside of every curve — turning
-    # in slightly before the geometry beats arriving wide and paying
-    # for it with a cross-lane correction on exit. Negative reacts
+    # lookahead_s covers the MEASURED response lag (CAL-set); this is a
+    # deliberate turn-in-early bias on top. Reset to 0.0 (2026-07-03):
+    # the +0.05 lead stacked with the 2*avg-cur extrapolation to
+    # over-command curvature on tightening hairpins and cut the car to
+    # the inside. Timing is now handled by lookahead_s + the plan-peak
+    # cap in desired_curvature_lag_adjusted; if the car starts hugging
+    # the OUTSIDE again, nudge this back up a little. Negative reacts
     # closer to the present (function floors total delay at 1 ms).
-    curvature_anticipation_s: float = 0.05
+    curvature_anticipation_s: float = 0.0
 
     # ISO lateral limits (openpilot drive_helpers.clip_curvature,
     # EU-guideline constants). When lat_jerk_max_mps3 is set the

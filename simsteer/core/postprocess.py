@@ -249,6 +249,20 @@ def desired_curvature_lag_adjusted(
 
     desired_k = 2.0 * avg_k - cur_k
 
+    # The 2*avg - cur extrapolation can overshoot PAST the tightest
+    # curvature the plan actually reaches — worst on a fast-tightening
+    # hairpin, where it commanded ~36% more curvature than the model's
+    # own plan and steered the car to the INSIDE (into oncoming / the
+    # inside dirt; 2026-07-03 forensics, frame 17105). Cap the
+    # anticipated magnitude to the plan's own peak curvature within the
+    # lookahead window so we lead the turn-in TIMING without ever
+    # commanding more turn than the model plans.
+    horizon = delay * 1.5
+    kwin = yaw_rate_col[t_idxs <= horizon] / v
+    if kwin.size:
+        k_cap = float(np.max(np.abs(kwin)))
+        desired_k = float(np.clip(desired_k, -k_cap, k_cap))
+
     # Rate-limit against the previous commanded curvature. This is the
     # mechanism that prevents "steers in too early": a step jump in
     # plan curvature gets ramped over many frames.
