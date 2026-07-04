@@ -1048,7 +1048,7 @@ class App:
                 "a_meas,thr,brk,steer,k_des,k_meas,lane_off,lead_x,"
                 "lead_p,pitch_applied,pitch_learned,"
                 "lp0,lp1,lp2,lp3,des_i,des_p,v_end,trim,roll,"
-                "plan_v0,pose_v\n")
+                "plan_v0,pose_v,plan_k,k_raw,auth,ff\n")
             print(f"[panel] run log: {self.log_path}", flush=True)
         lead_p = (float(decoded.lead_prob[0])
                   if decoded.lead_prob.size else 0.0)
@@ -1075,7 +1075,14 @@ class App:
             # current speed (plan velocity at t=0, and posenet vx) vs
             # the real v_ego. If these read low on clean highway, the
             # model underperceives speed -> plans slow -> we brake.
-            f"{float(decoded.plan[0, 3]):.2f},{float(decoded.pose[0]):.2f}\n")
+            f"{float(decoded.plan[0, 3]):.2f},{float(decoded.pose[0]):.2f},"
+            # steering-command decomposition: the model's raw instant
+            # plan curvature -> after the anticipation lead (k_raw) ->
+            # x authority -> x FF. Lets a lane-crossing curve be traced
+            # to whichever stage inflated the wheel.
+            f"{float(decoded.plan[0, 14]) / max(float(decoded.plan[0, 3]), 1.0):.5f},"
+            f"{self.lat.last_desired_k_raw:.5f},"
+            f"{self.lat.last_authority:.2f},{self.lat.last_ff:.3f}\n")
 
         # flight recorder trigger: engaged, moving, and the plan's
         # velocity target collapsed well below current speed with no
