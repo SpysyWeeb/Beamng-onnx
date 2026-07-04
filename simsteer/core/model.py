@@ -85,6 +85,8 @@ class DrivingModel:
             [np.zeros(DESIRE_LEN, dtype=np.float32) for _ in range(self.DESIRE_BUF_LEN)],
             maxlen=self.DESIRE_BUF_LEN,
         )
+        # Previous frame's raw desire, for the rising-edge pulse (below).
+        self._prev_desire = np.zeros(DESIRE_LEN, dtype=np.float32)
 
     def step(self, img: np.ndarray, big_img: np.ndarray | None = None,
              desire: np.ndarray | None = None,
@@ -114,10 +116,22 @@ class DrivingModel:
         hidden = vision_flat[h_start:h_end]
         self._feat_q.append(hidden)
 
-        # Push desire pulse into its ringbuffer.
+        # Push desire pulse into its ringbuffer. openpilot's modeld feeds
+        # the desire as a rising-EDGE pulse, not a held signal: only the
+        # frame a desire first goes high is nonzero, then it's zero even
+        # while the command is still held. The model latches the maneuver
+        # from that single pulse; feeding a HELD one-hot instead fills
+        # the whole buffer with 1.0 (out of distribution) and makes the
+        # policy throw the wheel to the commanded side while the plan
+        # collapses to a straight line. Callers may pass a held one-hot;
+        # convert it here.  new = where(desire - prev > 0.99, desire, 0)
         if desire is None:
             desire = np.zeros(DESIRE_LEN, dtype=np.float32)
-        self._desire_q.append(desire.astype(np.float32, copy=False))
+        desire = desire.astype(np.float32, copy=False)
+        pulse = np.where(desire - self._prev_desire > 0.99, desire, 0.0
+                         ).astype(np.float32)
+        self._prev_desire = desire
+        self._desire_q.append(pulse)
 
         # Build policy inputs by sampling the queues.
         feat_arr = np.stack(list(self._feat_q), axis=0)        # (97, 512)
