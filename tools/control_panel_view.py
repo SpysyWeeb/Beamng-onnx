@@ -222,9 +222,20 @@ class ControlView:
     def build(self):
         app = self.app
         self.eng.start()
-        if not self.eng.wait_first():
-            raise RuntimeError("no camera frames after 60 s")
-        cw, ch = self.eng.cam_w, self.eng.cam_h
+        if app._linked:
+            if not self.eng.wait_first():
+                raise RuntimeError("no camera frames after 60 s")
+            cw, ch = self.eng.cam_w, self.eng.cam_h
+        else:
+            # Freeroam gate: no camera until LINK — seed a black
+            # placeholder (camera aspect) so the window + LINK overlay
+            # show immediately instead of blocking on a frame that never
+            # comes. Real frames reuse these dims after linking.
+            cw = CAM_DW
+            ch = max(1, CAM_DW * cp.CAM_H // cp.CAM_W)
+            self.eng.cam_w, self.eng.cam_h = cw, ch
+            self.eng.rgba = np.zeros((ch, cw, 4), dtype=np.float32)
+            self.eng.rgba[:, :, 3] = 1.0
 
         dpg.create_context()
         for cand in ("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
