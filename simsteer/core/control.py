@@ -49,6 +49,7 @@ in its velocity prediction; we just follow it.
 
 from __future__ import annotations
 
+import collections
 import json
 import math
 import time
@@ -140,15 +141,23 @@ class ControllerConfig:
     # lane" complaint (2026-07-02).
     lat_jerk_max_mps3: float | None = 15.0
     lat_accel_max_mps2: float = 0.0
-    # Understeer gradient for the FF wheel target: multiplier
-    # (1 + kv*v^2), capped at understeer_cap. 0 disables. Re-fit
-    # 2026-07-03 (run_160115): the 0.00055 fit still left in-curve
-    # delivery at 0.88 (0.82 on lane changes) — the truck ran wide and
-    # drifted lanes on long highway curves. Raw delivery (no FF) is
-    # ~0.75 at 18 m/s, ~0.65 at 25 m/s; 0.0009 brings both bands to
-    # ~1.0. Cap raised to 1.8 so 24-25 m/s isn't clipped mid-boost.
-    understeer_kv: float = 0.0009
+    # Understeer FF for the wheel target — SPEED-GATED and CLOSED-LOOP
+    # (2026-07-03). Tires understeer (need extra wheel for the same
+    # curvature) as ~v^2, but at city-turn speed there's no understeer,
+    # so a flat boost there just OVER-steers — the "leans too hard into
+    # tight turns" complaint (measured: delivery gain 1.16 in 8 m/s
+    # turns). A gate ramps the FF in between understeer_v_lo and
+    # understeer_v_hi; at/below v_lo the FF is 1.0. The MAGNITUDE is
+    # learned per vehicle: on steady high-speed curves it watches the
+    # delivery gain (model's achieved curvature pose[5]/v vs the
+    # curvature we commanded) and nudges the multiplier to drive that
+    # ratio to 1.0. Warm-started + persisted per vehicle (a tire/mass
+    # property). understeer_learn_rate 0 freezes it (static FF).
+    understeer_ff_init: float = 1.45   # high-speed multiplier warm-start
     understeer_cap: float = 1.8
+    understeer_v_lo: float = 10.0      # gate floor (FF = 1.0 here)
+    understeer_v_hi: float = 22.0      # gate ceiling (full learned FF)
+    understeer_learn_rate: float = 0.01
     # Extra curvature authority while a lane change is held — see the
     # authority block in compute(). Stacks on steer_authority.
     lane_change_authority: float = 1.3
@@ -452,10 +461,22 @@ class ControllerConfig:
 
 class LateralController:
     def __init__(self, cfg: ControllerConfig | None = None,
-                 live_params: LiveParams | None = None) -> None:
+                 live_params: LiveParams | None = None,
+                 understeer_ff: float | None = None) -> None:
         self.cfg = cfg or ControllerConfig()
         self.live_params = live_params or LiveParams()
+        # Learned per-vehicle understeer FF magnitude (high-speed
+        # multiplier). Warm-started from the persisted calibration;
+        # refined live on steady curves; NOT reset on engage/disengage.
+        self._understeer_ff = float(
+            understeer_ff if understeer_ff is not None
+            else self.cfg.understeer_ff_init)
+        # Recent commanded curvature (~0.5 s) — the closed-loop FF only
+        # learns when the curve is SUSTAINED (so the lag between command
+        # and the model's observed response doesn't matter).
+        self._k_recent = collections.deque(maxlen=10)
         self.last_curvature = 0.0
+        self.last_ff = 1.0
         self.last_target_wheel = 0.0
         self.last_axis = 0.0
         self.last_axis_target = 0.0
@@ -489,6 +510,54 @@ class LateralController:
         self.axis_trim_state = 0.0
         self.lpf_wheel_error = 0.0
         self.last_trim_frozen_reason = ""
+        self._k_recent.clear()
+        # _understeer_ff intentionally NOT reset — persisted per-vehicle
+        # calibration, not transient engage state.
+
+    @property
+    def understeer_ff(self) -> float:
+        """Learned per-vehicle understeer FF magnitude (for persistence
+        — see load_understeer_ff / save_understeer_ff)."""
+        return self._understeer_ff
+
+    def _learn_understeer(self, decoded: Decoded, v_ego: float,
+                          in_lane_change: bool) -> None:
+        """Closed-loop understeer FF. On a SUSTAINED high-speed curve,
+        compare the model's achieved curvature (ego yaw-rate / v) to the
+        curvature we commanded and ease the learned multiplier toward
+        the value that makes achieved == commanded. Tightly gated and
+        slow, so noisy pose yaw can't destabilise the steering. Only
+        runs while engaged (compute() is called only when engaged)."""
+        cfg = self.cfg
+        if cfg.understeer_learn_rate <= 0.0:
+            return
+        # Learn only where the gate is essentially full — there the
+        # learned magnitude maps directly to delivery (no partial-gate
+        # ambiguity). Lane changes carry the authority boost + dynamic
+        # maneuver, so exclude them.
+        if v_ego < cfg.understeer_v_hi or in_lane_change:
+            return
+        if len(self._k_recent) < self._k_recent.maxlen:
+            return
+        ks = [abs(k) for k in self._k_recent]
+        kbar = sum(ks) / len(ks)
+        if kbar < 0.004:                       # a real curve, not straight
+            return
+        if (max(ks) - min(ks)) > 0.20 * kbar:  # sustained, not a transient
+            return
+        k_cmd = self._k_recent[-1]
+        k_meas = float(decoded.pose[5]) / max(v_ego, 1.0)
+        if k_cmd == 0.0 or (k_meas > 0) != (k_cmd > 0):   # same direction
+            return
+        g = k_meas / k_cmd                     # delivery gain
+        if not (0.4 < g < 2.5):                # reject noise/outliers
+            return
+        # ease toward the FF that would make delivery 1.0 (ff_new = ff/g)
+        target = self._understeer_ff / g
+        self._understeer_ff += cfg.understeer_learn_rate * (
+            target - self._understeer_ff)
+        self._understeer_ff = float(
+            np.clip(self._understeer_ff, 1.0, cfg.understeer_cap))
 
     def compute(self, decoded: Decoded, v_ego: float,
                 actual_wheel_angle: float | None = None,
@@ -564,17 +633,19 @@ class LateralController:
         self.last_authority = authority
 
         target_wheel = math.atan(k_total * cfg.wheelbase_m)
-        # Understeer gradient: required steer grows ~(1 + kv*v^2) for
-        # the same curvature (tire slip angles). Measured 2026-07-02
-        # (run_231336, in-curve delivery gain lag-shifted): 0.96 at
-        # 8-15 m/s, 0.82 at 15-22, 0.74 at 22-30 — deficit vs v^2 fits
-        # kv ~ 0.00055 cleanly. Without this the car delivers 3/4 of
-        # the asked curvature at highway speed and rides wide on every
-        # fast sweeper regardless of timing lead. Static measured
-        # constant (CAL-doctrine); bounded so a bad config can't
-        # triple the wheel.
-        target_wheel *= min(1.0 + cfg.understeer_kv * v_ego * v_ego,
-                            cfg.understeer_cap)
+        # Understeer FF — speed-gated + closed-loop (see config). The
+        # learned magnitude only bites at speed (tires understeer as
+        # ~v^2); a flat boost at city-turn speed just over-steers. Learn
+        # BEFORE applying so the gain reflects the delivery it produced.
+        self._k_recent.append(k_total)
+        self._learn_understeer(decoded, v_ego, in_lane_change)
+        w = float(np.clip(
+            (v_ego - cfg.understeer_v_lo)
+            / max(cfg.understeer_v_hi - cfg.understeer_v_lo, 1e-3),
+            0.0, 1.0))
+        ff = 1.0 + w * (self._understeer_ff - 1.0)
+        target_wheel *= min(ff, cfg.understeer_cap)
+        self.last_ff = ff
         self.last_target_wheel = target_wheel
 
         # FF axis from LiveParams inversion. v_ego enters the speed-
@@ -680,6 +751,29 @@ def save_speed_scale(game: str | None, scale: float) -> None:
     try:
         state_path("speed_scale", game).write_text(
             json.dumps({"scale": round(scale, 4)}))
+    except Exception:
+        pass
+
+
+def load_understeer_ff(game: str | None, default: float = 1.45) -> float:
+    """Warm-start value for the per-vehicle understeer FF magnitude — a
+    tire/mass property, learned closed-loop and persisted per vehicle so
+    each car reloads its own value instead of relearning from scratch."""
+    p = load_with_fallback("understeer_ff", game)
+    if p is not None:
+        try:
+            return float(json.loads(p.read_text()).get("ff", default))
+        except Exception:
+            pass
+    return default
+
+
+def save_understeer_ff(game: str | None, ff: float) -> None:
+    """Persist the learned per-vehicle understeer FF (clamped sane)."""
+    ff = float(np.clip(ff, 1.0, 2.0))
+    try:
+        state_path("understeer_ff", game).write_text(
+            json.dumps({"ff": round(ff, 4)}))
     except Exception:
         pass
 

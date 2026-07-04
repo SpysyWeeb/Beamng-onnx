@@ -142,22 +142,52 @@ def test_min_stable_delay():
           f"k(0.05s)={k_small:.4f} k(0.3s)={k_stable:.4f}")
 
 
-def test_understeer_ff():
-    # same curvature demand must produce a larger wheel target at speed
+def test_understeer_ff_gate_and_learn():
+    # FF is speed-GATED (no boost at city-turn speed, where it would
+    # over-steer) and its magnitude is learned CLOSED-LOOP from delivery.
     from simsteer.core.control import LateralController
     cfg = ControllerConfig()
     lc = LateralController(cfg)
-    d = mk(10.0)
+    d = mk(8.0)
     d.plan[:, 11] = [0.5 * t for t in
                      LongitudinalController(ControllerConfig())._T_IDXS]
-    lc.compute(d, 10.0)
-    w_slow = abs(lc.last_target_wheel / max(lc.last_curvature, 1e-9))
+    lc.compute(d, 8.0)
+    check("understeer FF ~1.0 at city-turn speed (8 m/s)",
+          abs(lc.last_ff - 1.0) < 0.02, f"ff={lc.last_ff:.3f}")
     lc.reset()
     lc.compute(d, 25.0)
-    w_fast = abs(lc.last_target_wheel / max(lc.last_curvature, 1e-9))
-    boost = w_fast / max(w_slow, 1e-9)
-    check("understeer FF boosts wheel-per-curvature with speed",
-          1.15 < boost < 1.6, f"boost@25 vs 10 m/s = {boost:.2f}")
+    check("understeer FF boosts at highway speed (25 m/s)",
+          lc.last_ff > 1.2, f"ff={lc.last_ff:.3f}")
+
+    # under-delivery (achieved < commanded) must RAISE the learned FF
+    lc = LateralController(cfg, understeer_ff=1.30)
+    d = mk(25.0)
+    d.pose[5] = 0.8 * 0.01 * 25.0        # k_meas = 0.8 * k_cmd
+    lc._k_recent.extend([0.01] * 10)     # steady high-speed curve
+    for _ in range(200):
+        lc._learn_understeer(d, 25.0, False)
+    check("under-delivery raises learned FF", lc.understeer_ff > 1.32,
+          f"ff={lc.understeer_ff:.3f}")
+
+    # over-delivery must LOWER it
+    lc = LateralController(cfg, understeer_ff=1.50)
+    d = mk(25.0)
+    d.pose[5] = 1.2 * 0.01 * 25.0        # k_meas = 1.2 * k_cmd
+    lc._k_recent.extend([0.01] * 10)
+    for _ in range(200):
+        lc._learn_understeer(d, 25.0, False)
+    check("over-delivery lowers learned FF", lc.understeer_ff < 1.48,
+          f"ff={lc.understeer_ff:.3f}")
+
+    # gate blocks learning at city-turn speed
+    lc = LateralController(cfg, understeer_ff=1.30)
+    d = mk(8.0)
+    d.pose[5] = 0.8 * 0.01 * 8.0
+    lc._k_recent.extend([0.01] * 10)
+    for _ in range(200):
+        lc._learn_understeer(d, 8.0, False)
+    check("no understeer learning below the gate",
+          abs(lc.understeer_ff - 1.30) < 1e-6, f"ff={lc.understeer_ff:.3f}")
 
 
 def test_action_head_override():
@@ -187,7 +217,7 @@ if __name__ == "__main__":
     test_no_vision_intervention()
     test_curvature_clip()
     test_min_stable_delay()
-    test_understeer_ff()
+    test_understeer_ff_gate_and_learn()
     test_action_head_override()
     print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILURES: {FAILS}'}")
     sys.exit(1 if FAILS else 0)

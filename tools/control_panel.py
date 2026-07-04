@@ -53,7 +53,8 @@ from simsteer.core.calibration import Calibration
 from simsteer.core.constants import DESIRE_LEN
 from simsteer.core.control import (ControllerConfig, LateralController,
                                    LongitudinalController, load_speed_scale,
-                                   save_speed_scale)
+                                   save_speed_scale, load_understeer_ff,
+                                   save_understeer_ff)
 from simsteer.core.learners.livecalib import LiveCalib
 from simsteer.core.learners.liveparams import LiveParams
 from simsteer.core.model import DrivingModel
@@ -468,7 +469,14 @@ class App:
         # apply; the CAM button ('v') A/Bs application live.
         self.calib_live = False
         self.lc.apply = False
-        self.lat = LateralController(cfg, live_params=self.lp)
+        self.lat = LateralController(
+            cfg, live_params=self.lp,
+            understeer_ff=load_understeer_ff(self._game_key))
+        if self.screen_mode:
+            # screen mode already learns delivery through the online
+            # rack fit; a second closed loop on the same signal would
+            # fight it, so freeze the understeer FF at its warm-start.
+            self.lat.cfg.understeer_learn_rate = 0.0
         # Warm-start the sim-scale speed correction from this vehicle's
         # persisted calibration (camera-height driven, so per-vehicle);
         # it keeps adapting live and is saved back on exit.
@@ -1584,6 +1592,7 @@ def main() -> int:
             # speed, so the live scale never leaves 1.0 meaningfully)
             if not app.screen_mode:
                 save_speed_scale(app._game_key, app.long.speed_scale)
+                save_understeer_ff(app._game_key, app.lat.understeer_ff)
         except Exception:
             pass
         try:
