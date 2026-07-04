@@ -10,20 +10,51 @@ Windows; this fork keeps simsteer's model core (warp, preprocessing,
 decode, learners) and replaces all of the I/O. There are **two ways to
 feed and drive the game:**
 
-| | **tech mode** (BeamNG.tech license) | **screen mode** (any BeamNG) |
+| | **tech mode** (BeamNG.tech license) | **hybrid mode** (any BeamNG, no key) |
 |---|---|---|
 | Frames | beamngpy `Camera` sensor, shared-memory stream | capture the game window (hood cam) |
-| Telemetry | beamngpy `Electrics` (real speed) | none — model's own visual speed estimate |
-| Control | direct `input.event` steering + pedals | a virtual Logitech G29 (uinput) |
-| Map / vehicle | chosen for you, scripted or freeroam | you pick them in-game |
+| Telemetry | beamngpy `Electrics` (real speed) | beamngpy `Electrics` (real speed) |
+| Control | direct `input.event` steering + pedals | direct `input.event` steering + pedals |
+| Map / vehicle / traffic / freeroam | beamngpy scenario | beamngpy scenario (identical) |
 
-Tech mode is the high-fidelity path (the `Camera` sensor renders the
-model's windshield view independently of what's on screen, so you can
-film the AI car from any angle while it drives). Screen mode needs no
-license — it captures whatever's on your monitor and drives a virtual
-wheel — at the cost of a noisier, telemetry-free signal.
+Probed live (2026-07-04, tech.key removed): without a license the
+beamngpy socket, scenario load/start, vehicle spawn, `Electrics`/`State`
+and `vehicle.control` **all work** — the *only* tech-gated feature is
+the automated `Camera` sensor. So hybrid mode keeps beamngpy for
+everything (scenario, control, real speed, freeroam, traffic) and swaps
+just the camera for a screen capture of the game window. Tech mode's
+one edge is the independent `Camera` render (film the AI car from any
+angle while it drives); hybrid's camera is whatever's on your monitor,
+so set the driver view to the **hood cam**.
 
 Inference runs on onnxruntime **ROCm** (AMD GPU) with CPU fallback.
+
+## How it works
+
+Every 50 ms (20 Hz — the rate the models were trained at):
+
+1. **Capture** one wide camera frame — a beamngpy `Camera` sensor (tech
+   mode) or a grab of the game window (hybrid mode).
+2. **Warp** it into the two virtual views the model expects — a narrow
+   (focal 910) and a wide (focal 455) crop — and pack each as the
+   12-channel YUV tensor at the fixed `1×12×128×256` the network takes
+   (identical to what a real comma 3 feeds; the model can't take a
+   bigger image, so we render oversized and supersample down).
+3. **Run** the ONNX driving model (a single **supercombo**, or a
+   **split** vision+policy pair) → a plan (trajectory + speed/accel) and
+   perception (lane lines, road edges, leads).
+4. **Control** — `simsteer/core/control.py` turns the plan into a
+   steering angle and pedal positions, tuned to match real openpilot.
+5. **Actuate** over beamngpy (`input.event` steering smoothed to 100 Hz
+   + `vehicle.control` pedals) and read back real speed from `Electrics`.
+
+The model only ever consumes the **camera** (plus its own recurrent
+state and a couple of scalars like desire and traffic-convention) — no
+radar, no lidar. On a real car radar is fused *downstream* of the model
+to sharpen the lead lock; here it simply doesn't exist, so lead tracking
+is vision-only. This camera-only diet is also why hybrid mode works: the
+camera is the single tech-gated sensor, and everything else runs over
+free beamngpy.
 
 ## Status
 
@@ -34,13 +65,103 @@ Inference runs on onnxruntime **ROCm** (AMD GPU) with CPU fallback.
 - **M3 — closed loop** ✅ lateral + end-to-end longitudinal, extensively
   tuned against real openpilot behavior (see *The control stack* and
   *What we learned*).
-- **Screen mode** ✅ no-tech.key path: window capture + virtual G29,
-  runs the full pipeline at 20 Hz with zero beamngpy.
+- **Hybrid mode** ✅ no-tech.key path: full beamngpy scenario / control /
+  real speed, only the camera is screen-captured (the one licensed
+  sensor). Runs the full pipeline at 20 Hz.
 - **UI** ✅ start panel and control panel rebuilt in dearpygui (crisp
   fonts, live camera texture, real plots, op-replay-clipper telemetry
   gauge).
 - **M4 — scenarios** ⏳ traffic spawning works (start-panel slider);
   next: player-driven lead cut-ins, construction props, filming runs.
+
+## How to install
+
+**1. Clone** the Linux fork (it lives on the `linux` branch):
+
+```bash
+git clone -b linux https://github.com/SpysyWeeb/Beamng-onnx
+cd Beamng-onnx
+```
+
+**2. Python 3.12 environment:**
+
+```bash
+uv venv .venv --python 3.12          # or: python3 -m venv .venv
+uv pip install -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
+```
+
+CPU inference already runs the whole pipeline at ~60 Hz, so a GPU is
+optional (see ROCm below). Beyond numpy / opencv / onnxruntime, the
+notable deps are `python-xlib` (hybrid-mode window capture) and
+`dearpygui` (the start/control-panel UIs) — both in `requirements.txt`.
+
+**3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. The start
+panel auto-detects the common Steam paths and whether a `tech.key` is
+present; you can also type the install directory in.
+
+**4. Models** — drop the ONNX files in `models/` (see *Models* below).
+
+**5. Run** `./start.sh` and press START.
+
+### Why a distrobox — and when you don't need one
+
+This branch was developed on **Bazzite** (an immutable, atomic Fedora
+variant) where you can't just install the ROCm libraries onto the host
+system. The fix is a [distrobox](https://distrobox.it/) — a mutable
+container that shares your home directory — with ROCm and the Python
+venv inside it. **The game always runs on the host; only the control
+panel runs in the container**, talking to BeamNG over the local
+beamngpy socket. On this machine the start panel launches the panel with
+a `distrobox enter …` prefix, stored in `launcher_beamng.json` as
+`panel_cmd_prefix`.
+
+**If your distro is *not* immutable** (Ubuntu, Arch, regular Fedora, …)
+you don't need any of this. Install Python — and, if you want GPU,
+ROCm — straight onto the host, create the venv normally, and just run
+`./start.sh`. Make sure `launcher_beamng.json` has **no**
+`panel_cmd_prefix` key (delete it if present) so the panel runs on the
+host too. Nothing in the code requires the container — it's purely a
+packaging convenience for immutable systems.
+
+### Models (not in the repo)
+
+Drop the ONNX files in `models/`. Filenames use a **name-first**
+convention, `<NAME>_driving_<type>.onnx`, so the release/experiment name
+sorts to the front:
+
+- **Supercombo** (openpilot master, a single file) — e.g.
+  `CD210_driving_supercombo.onnx`, `big_driving_supercombo.onnx`,
+  `Deep_rl3_driving_supercombo.onnx`, `Toby_rl_driving_supercombo.onnx`.
+- **Split pair** (openpilot 0.11.x) — a matched
+  `<NAME>_driving_vision.onnx` + `<NAME>_driving_policy.onnx` (e.g.
+  `POP_driving_vision.onnx` / `POP_driving_policy.onnx`). The start
+  panel's **Link** toggle (between the two dropdowns) keeps them on the
+  same name; the halves are trained together, so mixing names usually
+  won't run.
+
+Output layout is read from each file's own metadata, so checkpoint swaps
+need no code changes. The default resolver globs
+`*driving_supercombo*.onnx`, and the start panel can browse to any
+`.onnx`.
+
+- **Big model** (`big_driving_supercombo.onnx`, comma's USB-eGPU model,
+  1.76 GB) is the only one with a real **action head** (a trained,
+  smoothed accel/curvature output). It needs the game's graphics turned
+  down enough to hold 20 Hz, or its temporal buffers time-warp. The
+  smaller supercombos (CD210, Deep_rl3, Toby_rl) hold 20 Hz easily.
+
+comma's model weights are **not in this repo**. Their LFS lives on
+GitLab (`gitlab.com/commaai/openpilot-lfs`), not GitHub — pull the
+pointer from `raw.githubusercontent`, then resolve the actual file
+through the GitLab LFS `objects/batch` API.
+
+### ROCm (optional, AMD GPUs)
+
+`onnxruntime-rocm` from PyPI plus the ROCm 6.4 runtime libs
+(`hipblas rocblas miopen-hip hip-runtime-amd hipfft hipsparse hiprand
+rocrand rccl roctracer hipsolver rocsolver rocfft` from
+repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
+&& ldconfig`. Falls back to CPU automatically.
 
 ## Running
 
@@ -58,20 +179,15 @@ It auto-detects your BeamNG install and tech.key and reshapes itself:
   `west_coast_usa` runs the scripted scenario at the calibrated spawn;
   any other map uses *freeroam interception* — load it in-game, enter a
   car, press START and the model hooks that car.
-- **no tech.key** → screen mode. The map/vehicle options disappear
-  (you set those in-game); you set the hood-cam FOV. Have BeamNG open
-  with a car in **hood camera** view, press START, and the model
-  captures the window and drives a virtual wheel.
+- **no tech.key** → hybrid mode. Same map / vehicle / traffic / freeroam
+  options as tech mode (they all run over beamngpy); you additionally
+  set the hood-cam FOV. It boots the game, waits for the beamngpy
+  handshake, then starts the control panel with the camera coming from
+  a screen capture. Set the driver view to the **hood cam**.
 
 Both spawns are detached, so closing the launcher (it auto-closes ~3 s
 after START) never takes down the game or panel. The control panel logs
 to `debug_out/control_panel_last.log`.
-
-**Screen-mode wheel binding (one-time):** BeamNG applies its shipped
-G29 inputmap automatically (steering = X axis, throttle = Y, brake =
-RZ, both pedals inverted — the virtual wheel matches). If a pedal
-doesn't respond, run `python -m simsteer.io.vwheel --sweep` and bind it
-in Options → Controls.
 
 **Manual pieces:**
 
@@ -80,7 +196,7 @@ bash launch_beamng.sh                       # host: BeamNG + tech server
 
 python tools/control_panel.py               # tech mode, scripted west_coast_usa
 python tools/control_panel.py --attach      # hook the car already in-game
-python tools/control_panel.py --screen --fov 100     # screen mode (no beamngpy)
+python tools/control_panel.py --hybrid --fov 100  # no-key: beamngpy + screen camera
 python tools/control_panel.py --model models/big_driving_supercombo.onnx
 python tools/control_panel.py --split --vision <v.onnx> --policy <p.onnx>
 python tools/control_panel.py --classic     # legacy hand-drawn cv2 UI
@@ -90,54 +206,6 @@ python tools/live_view.py --supercombo      # overlay viewer; drive manually
 **Controls** (panel buttons or keys): `e` engage · `l` long-mode cycle
 (EXP / CHILL / OFF) · `a`/`d` lane-change L/R · `z`/`c` turn L/R ·
 `r` CAL · `v` camera-calib A/B · speed-cap slider or `-`/`=`.
-
-## Requirements
-
-Any Linux distro. Python 3.12 venv:
-
-```bash
-uv venv .venv --python 3.12        # or python3 -m venv .venv
-uv pip install -r requirements.txt
-```
-
-CPU inference runs the full pipeline at ~60 Hz — the ROCm section is
-optional. Screen mode additionally needs `evdev`, `mss`, `python-xlib`
-(virtual wheel + window capture); the dearpygui UIs need `dearpygui`.
-
-(Developed on Bazzite with the Python env in a distrobox, purely
-because that's an easy place to put the ROCm libraries on an immutable
-OS — a dev-machine detail, not a dependency. The game runs on the host;
-only the control panel runs in the container.)
-
-### Models (not in the repo)
-
-Put the ONNX files in `models/`. Supercombo files may carry a release
-suffix (e.g. `driving_supercombo_CD210.onnx`) — the default resolver
-globs `driving_supercombo*.onnx`. The start panel toggles between a
-single **supercombo** and a **split vision + policy** pair, and can
-browse to any `.onnx`. Output layout is read from each file's own
-metadata, so checkpoint swaps need no code changes.
-
-- **Supercombo** (openpilot master): one `driving_supercombo*.onnx`.
-- **Split pair** (openpilot 0.11.x): `driving_vision*.onnx` +
-  `driving_policy*.onnx`.
-- **Big model** (`big_driving_supercombo.onnx`, comma's USB-eGPU
-  model, 1.76 GB): supported, and it's the only one with a real
-  **action head** (a trained, smoothed accel/curvature output). It
-  needs the game's graphics turned down enough to hold 20 Hz —
-  otherwise its temporal buffers time-warp.
-
-comma's LFS lives on GitLab (`gitlab.com/commaai/openpilot-lfs`), not
-GitHub — pull pointers from `raw.githubusercontent`, then the GitLab
-LFS `objects/batch` API.
-
-### ROCm (optional, AMD GPUs)
-
-`onnxruntime-rocm` from PyPI plus the ROCm 6.4 runtime libs
-(`hipblas rocblas miopen-hip hip-runtime-amd hipfft hipsparse hiprand
-rocrand rccl roctracer hipsolver rocsolver rocfft` from
-repo.radeon.com), then `echo /opt/rocm/lib > /etc/ld.so.conf.d/rocm.conf
-&& ldconfig`. Falls back to CPU automatically.
 
 ## The control stack
 
@@ -151,7 +219,9 @@ measured rack model, then executed at ~100 Hz:
 
 - Rack fit (`axis = a·wheel`) is a **measured constant** from the CAL
   routine (a scripted steering system-ID), not an online learner — the
-  sole exception is screen mode, which has no CAL and learns it live.
+  sole exception is hybrid **freeroam**, where CAL's teleport isn't
+  available (a car with a prior CAL loads its constant; otherwise it
+  learns the rack live while engaged).
 - **Understeer feed-forward**: the wheel target scales `(1 + kv·v²)`
   because tire slip grows with speed; fit from logged in-curve delivery
   (0.96 at city speed → 0.74 at highway).

@@ -72,7 +72,7 @@ class Engine(threading.Thread):
             tc = time.monotonic()
             tel = app.tel.snapshot()
             v_ego = tel["v_ego"]
-            if app.screen_mode:
+            if getattr(app.world, "no_telemetry", False):
                 app._vision_v += 0.25 * (
                     max(0.0, float(d.pose[0])) - app._vision_v)
                 v_ego = app._vision_v

@@ -5,9 +5,11 @@ detection, persistence and the START flow, with no UI. The view
 Two run modes:
   tech   — beamngpy: map + vehicle + traffic, our camera sensor and
            direct control. Needs a BeamNG.tech tech.key.
-  screen — no tech.key: capture the game window (player uses the hood
-           cam) and drive a virtual wheel. No map/vehicle/traffic
-           choices (the player sets those in-game).
+  hybrid — no tech.key: the SAME beamngpy flow (scenario, map, vehicle,
+           traffic, freeroam, control, real speed — all license-free),
+           with only the camera screen-captured instead of rendered as
+           a beamngpy sensor (the one tech-gated feature). The panel
+           gets --hybrid + the hood-cam FOV.
 """
 from __future__ import annotations
 
@@ -78,13 +80,30 @@ def _scan(pred) -> list[str]:
 
 
 def scan_models() -> list[str]:
-    out = _scan(lambda f: not f.startswith(("driving_vision",
-                                            "driving_policy")))
+    # Supercombo = anything that isn't a split half. Substring (not
+    # prefix) match so the name-first convention works too:
+    # <NAME>_driving_<type>.onnx, e.g. CD210_driving_supercombo.onnx.
+    out = _scan(lambda f: "driving_vision" not in f
+                and "driving_policy" not in f)
     return out or [DEFAULT_MODEL]
 
 
 def scan_split(kind: str) -> list[str]:
-    return _scan(lambda f: f.startswith(f"driving_{kind}"))
+    # kind is "vision" or "policy"; match the type anywhere in the name
+    # so both driving_vision_POP.onnx and POP_driving_vision.onnx hit.
+    key = f"driving_{kind}"
+    return _scan(lambda f: key in f)
+
+
+def model_name(path: str) -> str:
+    """The identifier in the name-first convention
+    <NAME>_driving_<type>.onnx (e.g. 'POP', 'DTR', 'big'); '' for the
+    un-prefixed base pair (driving_vision.onnx). Used to keep the split
+    vision/policy dropdowns on matching models."""
+    b = os.path.basename(path)
+    if b.endswith(".onnx"):
+        b = b[:-5]
+    return b.split("_driving_")[0] if "_driving_" in b else ""
 
 
 def port_open(port: int = TECH_PORT) -> bool:
@@ -136,11 +155,18 @@ class LauncherCore:
             self.arch = "supercombo"
         self.vision_models = scan_split("vision")
         self.policy_models = scan_split("policy")
-        self.vision_model = cfg.get("vision_model") or (
-            self.vision_models[0] if self.vision_models else "")
-        self.policy_model = cfg.get("policy_model") or (
-            self.policy_models[0] if self.policy_models else "")
-        # screen mode: in-game hood-cam horizontal FOV
+        self.vision_model = cfg.get("vision_model") or ""
+        if not os.path.isfile(self.vision_model):   # e.g. renamed away
+            self.vision_model = (self.vision_models[0]
+                                 if self.vision_models else "")
+        self.policy_model = cfg.get("policy_model") or ""
+        if not os.path.isfile(self.policy_model):
+            self.policy_model = (self.policy_models[0]
+                                 if self.policy_models else "")
+        # keep the split vision/policy dropdowns on the same model name
+        # (POP vision <-> POP policy); user can unlink at their own risk
+        self.link_split = bool(cfg.get("link_split", True))
+        # no-key hybrid: in-game hood-cam horizontal FOV
         self.screen_fov = float(cfg.get("screen_fov", 90.0))
         self._cfg_prefix = cfg.get("panel_cmd_prefix")
 
@@ -158,6 +184,7 @@ class LauncherCore:
                 "freeroam": self.freeroam,
                 "arch": self.arch, "vision_model": self.vision_model,
                 "policy_model": self.policy_model,
+                "link_split": self.link_split,
                 "screen_fov": self.screen_fov}
         if self._cfg_prefix:
             data["panel_cmd_prefix"] = self._cfg_prefix
@@ -200,54 +227,55 @@ class LauncherCore:
     def _flow(self) -> None:
         try:
             self.save()
-            if self.tech_key:
-                self._flow_tech()
-            else:
-                self._flow_screen()
+            self._flow_beamng(hybrid=not self.tech_key)
         finally:
             self.busy = False
 
-    # -- screen mode: no beamngpy, capture the running game --
-    def _flow_screen(self) -> None:
-        self.log("screen mode: make sure BeamNG is running, you are in "
-                 "a car, and the HOOD camera is active.")
-        args = ["--screen", "--fov", str(int(self.screen_fov))]
-        if not self._model_args(args):
-            return
-        self._spawn_panel(args)
-        self.log("control panel launching — it captures the game window "
-                 "and drives a virtual wheel.")
-        self.log("bind the virtual wheel once in the game's controls if "
-                 "steering/pedals don't respond.")
+    def _launch_beamng(self) -> bool:
+        """Boot BeamNG (unless the port is already up) and wait for the
+        tech server. Shared by tech mode and the no-key hybrid — both
+        want the game running with the -tcom socket. Returns True once
+        the port is open, False if the binary is missing or the port
+        never came up."""
+        if port_open():
+            return True
+        exe = find_binary(self.path)
+        if exe is None:
+            self.log("no BinLinux binary under that location — is "
+                     "this the BeamNG install dir?")
+            return False
+        self.log(f"launching BeamNG (tech server on {TECH_PORT}) ...")
+        env = dict(os.environ)
+        env["RADV_DEBUG"] = (env.get("RADV_DEBUG", "")
+                             + ",nocompute").lstrip(",")
+        subprocess.Popen(
+            ["nice", "-n", "10", exe, "-nosteam", "-tcom",
+             "-tport", str(TECH_PORT)],
+            cwd=self.path, env=env, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.log("waiting for the tech port (game boot takes a "
+                 "minute or two) ...")
+        t_end = time.monotonic() + 240
+        while time.monotonic() < t_end and not port_open():
+            time.sleep(2.0)
+        if not port_open():
+            self.log("gave up waiting for the tech port.")
+            return False
+        return True
 
-    # -- tech mode: beamngpy scenario / freeroam interception --
-    def _flow_tech(self) -> None:
+    # -- the single START flow (tech + no-key hybrid share it) --
+    def _flow_beamng(self, hybrid: bool) -> None:
+        """One beamngpy flow for both modes. With a tech.key the panel
+        renders the camera as a beamngpy sensor; without one (hybrid),
+        everything still runs over beamngpy EXCEPT the camera, which the
+        panel screen-captures (--hybrid). Scenario / map / vehicle /
+        traffic / freeroam are identical either way — all license-free
+        (probed live 2026-07-04: only the Camera sensor needs the key)."""
         if not os.path.isdir(self.path):
             self.log(f"BeamNG location not found: {self.path!r}")
             return
-        if not port_open():
-            exe = find_binary(self.path)
-            if exe is None:
-                self.log("no BinLinux binary under that location — is "
-                         "this the BeamNG install dir?")
-                return
-            self.log(f"launching BeamNG (tech server on {TECH_PORT}) ...")
-            env = dict(os.environ)
-            env["RADV_DEBUG"] = (env.get("RADV_DEBUG", "")
-                                 + ",nocompute").lstrip(",")
-            subprocess.Popen(
-                ["nice", "-n", "10", exe, "-nosteam", "-tcom",
-                 "-tport", str(TECH_PORT)],
-                cwd=self.path, env=env, start_new_session=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.log("waiting for the tech port (game boot takes a "
-                     "minute or two) ...")
-            t_end = time.monotonic() + 240
-            while time.monotonic() < t_end and not port_open():
-                time.sleep(2.0)
-            if not port_open():
-                self.log("gave up waiting for the tech port.")
-                return
+        if not self._launch_beamng():
+            return
 
         # The tport socket opens EARLY in boot — before the game can
         # actually handle beamngpy commands. Spawning the panel now
@@ -257,7 +285,11 @@ class LauncherCore:
         if not self._wait_ready():
             self.log("BeamNG never became ready for beamngpy.")
             return
-        self.log("BeamNG is ready.")
+        if hybrid:
+            self.log("beamngpy connected WITHOUT a tech.key — hybrid: "
+                     "control + speed over beamngpy, camera via capture.")
+        else:
+            self.log("BeamNG is ready.")
 
         attach = self.freeroam or self.map != "west_coast_usa"
         # Freeroam opens the panel LOCKED (no car needed yet) — the user
@@ -270,15 +302,24 @@ class LauncherCore:
             args.append("--freeroam")
         elif attach:
             args.append("--attach")
+        if hybrid:
+            args += ["--hybrid", "--fov", str(int(self.screen_fov)),
+                     "--window", "BeamNG"]
         if not self._model_args(args):
             return
         if self.traffic > 0 and not self.freeroam:
             args += ["--traffic", str(self.traffic)]
         self._spawn_panel(args)
-        self.log("control panel launching — LINK your car once it opens."
-                 if self.freeroam else
-                 "control panel launching — its window appears once the "
-                 "scenario loads.")
+        if hybrid:
+            tail = (", then LINK your car." if self.freeroam
+                    else " once the scenario loads.")
+            self.log("control panel launching — set your driver cam to "
+                     "the HOOD cam" + tail)
+        else:
+            self.log("control panel launching — LINK your car once it opens."
+                     if self.freeroam else
+                     "control panel launching — its window appears once the "
+                     "scenario loads.")
 
     def _wait_ready(self, timeout_s: float = 180.0) -> bool:
         """Poll a real beamngpy handshake until it succeeds — the port

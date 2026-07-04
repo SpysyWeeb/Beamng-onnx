@@ -170,7 +170,7 @@ _GATES_SYNTH_WHEEL = {
 def _gates_for(game: str | None) -> dict:
     """Return the gate profile for a game. ETS2 (and unknown) → strict;
     Forza / AC / BeamNG (synthesized wheel angles) → loose."""
-    if game in ("forza", "ac", "beamng"):
+    if game in ("forza", "ac") or (game and game.startswith("beamng")):
         return dict(_GATES_SYNTH_WHEEL)
     return dict(_GATES_DEFAULT)
 
@@ -264,12 +264,9 @@ _INITIAL_SEEDS: dict[tuple[str | None, str | None], tuple[float, float, float]] 
     # steering wheel (495 deg lock) ~ 0.13 rad road wheel -> a ~ 2.0,
     # b ~ 0 (measured, tools/m3_sign_check.py + step probe).
     ("beamng", None):    (2.0,  0.0,   0.0),
-    # No-tech.key screen mode drives a virtual G29 (simsteer/io/
-    # vwheel.py). The G29's ~900 deg soft-lock maps to the car's
-    # steering differently from FILTER_DIRECT, so this is a starting
-    # guess only — screen mode learns the rack online while engaged
-    # and the trim absorbs the residual.
-    ("screen", None):    (2.0,  0.0,   0.0),
+    # No-tech.key HYBRID drives the SAME FILTER_DIRECT rack over
+    # beamngpy (only the camera differs), so it shares the beamng seed
+    # via the beamng-prefix fallback in _get_seed().
 }
 
 
@@ -283,6 +280,10 @@ def _seed_for(game: str | None,
         return _INITIAL_SEEDS[(game, device_kind)]
     if (game, None) in _INITIAL_SEEDS:
         return _INITIAL_SEEDS[(game, None)]
+    # Per-vehicle / hybrid keys ("beamng-pickup", "beamng-hy", ...) all
+    # drive the same FILTER_DIRECT rack — share the base beamng seed.
+    if game and game.startswith("beamng"):
+        return _INITIAL_SEEDS[("beamng", None)]
     return DEFAULT_SEED
 
 

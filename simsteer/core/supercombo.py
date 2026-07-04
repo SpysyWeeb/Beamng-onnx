@@ -54,11 +54,12 @@ SUPERCOMBO_PATH = model_path("driving_supercombo.onnx")
 
 
 def _default_supercombo():
-    """The canonical name, else any driving_supercombo*.onnx (models
-    are kept under release names like driving_supercombo_CD210.onnx)."""
+    """The canonical name, else any *driving_supercombo*.onnx (models
+    are kept under release names, name-first: CD210_driving_supercombo
+    .onnx, Deep_rl3_driving_supercombo.onnx, ...)."""
     if SUPERCOMBO_PATH.exists():
         return SUPERCOMBO_PATH
-    hits = sorted(SUPERCOMBO_PATH.parent.glob("driving_supercombo*.onnx"))
+    hits = sorted(SUPERCOMBO_PATH.parent.glob("*driving_supercombo*.onnx"))
     return hits[0] if hits else SUPERCOMBO_PATH
 
 # Stds come out in log-space; clip before exp like openpilot's safe_exp

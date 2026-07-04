@@ -20,7 +20,7 @@ import time
 import dearpygui.dearpygui as dpg
 
 from launcher_core import (LauncherCore, ROOT, scan_models, scan_split,
-                           detect_tech_key, scan_levels)
+                           detect_tech_key, scan_levels, model_name)
 
 BROWSE = "browse..."
 
@@ -67,11 +67,34 @@ class StartView:
                 return
             lst = {"model": self.c.models, "vision": self.c.vision_models,
                    "policy": self.c.policy_models}[which]
-            for p in lst:
-                if os.path.basename(p) == value:
-                    setattr(self.c, f"{which}_model" if which != "model"
-                            else "model", p)
+            path = next((p for p in lst
+                         if os.path.basename(p) == value), None)
+            if path is None:
+                return
+            setattr(self.c, "model" if which == "model"
+                    else f"{which}_model", path)
+            # keep the split pair matched (POP vision -> POP policy)
+            if which in ("vision", "policy") and self.c.link_split:
+                self._sync_split(source=which)
         return cb
+
+    def _sync_split(self, source: str) -> None:
+        """Point the OTHER split dropdown at the same-named model as the
+        one the user just changed. No-op if there's no matching name."""
+        other = "policy" if source == "vision" else "vision"
+        want = model_name(getattr(self.c, f"{source}_model"))
+        pool = (self.c.policy_models if other == "policy"
+                else self.c.vision_models)
+        match = next((p for p in pool if model_name(p) == want), None)
+        if match:
+            setattr(self.c, f"{other}_model", match)
+            dpg.set_value(f"combo_{other}", os.path.basename(match))
+
+    def _toggle_link(self, sender, value):
+        self.c.link_split = bool(value)
+        if self.c.link_split:
+            # re-linking: snap policy onto the current vision's name
+            self._sync_split(source="vision")
 
     def _tech_toggle(self, sender, value):
         self.c.tech_key = value
@@ -88,20 +111,26 @@ class StartView:
         tech = self.c.tech_key
         split = self.c.arch == "split"
         fr = self.c.freeroam
-        dpg.configure_item("grp_path", show=tech)
-        dpg.configure_item("grp_freeroam", show=tech)
+        # Install path matters in BOTH modes now: no-key mode also boots
+        # the game (with -tcom) so beamngpy can route to it for control +
+        # speed, so keep the path input visible regardless of the key.
+        dpg.configure_item("grp_path", show=True)
+        # Scenario options work in BOTH modes now: no-key (hybrid) drives
+        # the same beamngpy scenario, only the camera is screen-captured.
+        dpg.configure_item("grp_freeroam", show=True)
         # map/vehicle/traffic don't matter in freeroam — you load the map
         # and spawn/LINK your own car in-game.
         for tag in ("grp_map", "grp_vehicle", "grp_traffic"):
-            dpg.configure_item(tag, show=tech and not fr)
+            dpg.configure_item(tag, show=not fr)
+        # Hood-cam FOV only matters for the screen-captured camera (no-key).
         dpg.configure_item("grp_fov", show=not tech)
         dpg.configure_item("grp_super", show=not split)
         dpg.configure_item("grp_split", show=split)
         dpg.set_value("mode_caption",
-                      "TECH MODE — beamngpy picks the map & car"
+                      "TECH MODE — beamngpy renders the camera too"
                       if tech else
-                      "SCREEN MODE — captures the game window, you drive "
-                      "the menus & hood cam")
+                      "NO-KEY MODE — beamngpy scenario + control + speed, "
+                      "camera from screen capture (set the hood cam)")
 
     # ---- build ----
     def build(self):
@@ -183,18 +212,27 @@ class StartView:
                     with dpg.group():
                         dpg.add_text("Vision")
                         dpg.add_combo(
-                            _names(self.c.vision_models),
+                            _names(self.c.vision_models), tag="combo_vision",
                             default_value=os.path.basename(
                                 self.c.vision_model) if self.c.vision_model
-                            else "", width=230,
+                            else "", width=210,
                             callback=self._pick_model("vision"))
+                    with dpg.group():
+                        # link toggle: keeps vision & policy on the same
+                        # model name. Checked = matched (the pairs are
+                        # trained together; mixing usually won't work).
+                        dpg.add_text("Link")
+                        dpg.add_checkbox(
+                            tag="chk_link_split",
+                            default_value=self.c.link_split,
+                            callback=self._toggle_link)
                     with dpg.group():
                         dpg.add_text("Policy")
                         dpg.add_combo(
-                            _names(self.c.policy_models),
+                            _names(self.c.policy_models), tag="combo_policy",
                             default_value=os.path.basename(
                                 self.c.policy_model) if self.c.policy_model
-                            else "", width=230,
+                            else "", width=210,
                             callback=self._pick_model("policy"))
 
             dpg.add_separator()
@@ -209,6 +247,9 @@ class StartView:
         dpg.show_viewport()
         dpg.set_primary_window("root", True)
         self._refresh_visibility()
+        # ensure the split pair starts matched when linked
+        if self.c.link_split and self.c.vision_models and self.c.policy_models:
+            self._sync_split(source="vision")
 
     def run(self):
         self.build()

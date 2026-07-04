@@ -371,44 +371,42 @@ class App:
         # maps / camera pose must not bleed into other vehicles
         self._game_key = ("beamng" if vehicle == "bastion"
                           else f"beamng-{vehicle}")
-        self.screen_mode = bool(getattr(args, "screen", False))
+        self.hybrid_mode = bool(getattr(args, "hybrid", False))
         # Freeroam gate: locked until the user LINKs to a known car.
-        self._freeroam = False
+        self._freeroam = bool(getattr(args, "freeroam", False))
         self._linked = True
         self._vision_v = 0.0
-        if self.screen_mode:
-            # No-tech.key mode: game-window capture + virtual wheel,
-            # zero beamngpy. Camera geometry comes from the captured
-            # window + the in-game hood-cam FOV; LiveCalib learns
-            # pitch/height on top like a fresh comma install. State
-            # files live under their own "screen" key.
-            from simsteer.io.screen_world import ScreenWorld
-            self.world = ScreenWorld(
+        if self.hybrid_mode:
+            # No-tech.key HYBRID: beamngpy drives everything (scenario,
+            # control, real Electrics telemetry) EXCEPT the camera, which
+            # is screen-captured (the one tech-gated sensor). Camera
+            # geometry comes from the captured window + the in-game
+            # hood-cam FOV; LiveCalib refines pitch/height on top. State
+            # files live under a "-hy" key so the screen-camera
+            # calibration never pollutes the tech-mode per-vehicle fits.
+            from simsteer.io.hybrid_world import HybridWorld
+            self.world = HybridWorld(
+                map_name=getattr(args, "map", None) or "west_coast_usa",
+                vehicle_model=vehicle,
+                attach=self._freeroam or bool(getattr(args, "attach", False)),
+                defer=self._freeroam,
                 window_hint=getattr(args, "window", None) or "BeamNG",
                 fov_h_deg=float(getattr(args, "fov", None) or 90.0))
-            self._game_key = "screen"
-            self._cam_height = 1.2      # unknown; LiveCalib refines
-            self.calib = Calibration(image_w=self.world.frame_w,
-                                     image_h=self.world.frame_h,
-                                     fov_h_deg=self.world.fov_h_deg,
-                                     height_m=self._cam_height,
-                                     lateral_sign=CAM_LATERAL_SIGN)
+            self._game_key = ("beamng-hy" if vehicle == "bastion"
+                              else f"beamng-hy-{vehicle}")
+            self.calib = self._build_calib()
         else:
-            self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
-                                     fov_h_deg=CAM_FOV_H_DEG,
-                                     height_m=self._cam_height,
-                                     lateral_sign=CAM_LATERAL_SIGN)
             # World FIRST, GPU session second (RDNA4 level-load rule).
-            self._freeroam = bool(getattr(args, "freeroam", False))
             self.world = BeamNGOnnxWorld(
                 map_name=getattr(args, "map", None) or "west_coast_usa",
-                vehicle_model=getattr(args, "vehicle", None) or "bastion",
+                vehicle_model=vehicle,
                 attach=self._freeroam or bool(getattr(args, "attach", False)),
                 defer=self._freeroam)
-            self._linked = not self._freeroam   # gated until LINK
-            n_traffic = int(getattr(args, "traffic", 0) or 0)
-            if n_traffic > 0 and self._linked:
-                self.world.spawn_traffic(n_traffic)
+            self.calib = self._build_calib()
+        self._linked = not self._freeroam            # gated until LINK
+        n_traffic = int(getattr(args, "traffic", 0) or 0)
+        if n_traffic > 0 and self._linked:
+            self.world.spawn_traffic(n_traffic)
 
         # per-game config: CAL persists the measured lookahead here.
         # Loaded BEFORE the model so the action_t horizons fed to the
@@ -479,9 +477,9 @@ class App:
         self.lat = LateralController(
             cfg, live_params=self.lp,
             understeer_ff=load_understeer_ff(self._game_key))
-        if self.screen_mode:
-            # screen mode already learns delivery through the online
-            # rack fit; a second closed loop on the same signal would
+        if self.hybrid_mode:
+            # hybrid learns the axis->wheel rack online (no CAL in
+            # freeroam); a second closed loop on the same signal would
             # fight it, so freeze the understeer FF at its warm-start.
             self.lat.cfg.understeer_learn_rate = 0.0
         # Warm-start the sim-scale speed correction from this vehicle's
@@ -548,6 +546,23 @@ class App:
     def cal_left_s(self) -> float:
         return max(0.0, self.cal_until - time.monotonic())
 
+    def _build_calib(self) -> "Calibration":
+        """Camera geometry for the warp. Tech mode uses the beamngpy
+        camera's known render (CAM_W/H at CAM_FOV_H_DEG). Hybrid mode's
+        camera is the game window, so it uses the captured size + the
+        in-game hood-cam FOV; either way height seeds from the vehicle
+        spec and LiveCalib refines. Shared by __init__ and relink()."""
+        if self.hybrid_mode:
+            return Calibration(image_w=self.world.frame_w,
+                               image_h=self.world.frame_h,
+                               fov_h_deg=self.world.fov_h_deg,
+                               height_m=self._cam_height,
+                               lateral_sign=CAM_LATERAL_SIGN)
+        return Calibration(image_w=CAM_W, image_h=CAM_H,
+                           fov_h_deg=CAM_FOV_H_DEG,
+                           height_m=self._cam_height,
+                           lateral_sign=CAM_LATERAL_SIGN)
+
     def set_banner(self, text: str, secs: float = 2.5) -> None:
         self.banner = text
         self.banner_until = time.monotonic() + secs
@@ -558,14 +573,15 @@ class App:
             return False, "not linked — click LINK to bind to your car"
         if self.frame_idx < WARMUP_FRAMES:
             return False, f"model warming up ({self.frame_idx}/{WARMUP_FRAMES})"
-        if self.screen_mode:
-            # No telemetry and no CAL here by design: the rack starts
-            # from a seed and learns online WHILE engaged (the only
-            # time we command the wheel and can observe the response).
+        if self.hybrid_mode and not self.lp.trusted():
+            # No CAL in freeroam (teleport is wcusa-only): the rack
+            # starts from a seed and learns online WHILE engaged (the
+            # only time we command the wheel and can observe it).
             # Gating engage on a trusted rack would deadlock — you can
             # never earn the samples. Best-effort start; the wheel-trim
             # integrator bounds the seed error and the driver is the
-            # fallback, exactly like a fresh comma calibration drive.
+            # fallback, like a fresh comma calibration drive. (A prior
+            # CAL for this car loads trusted and takes the tech path.)
             return True, ""
         if not self.tel.ok:
             return False, "no telemetry"
@@ -627,8 +643,8 @@ class App:
         elif key == "link":
             # Bind the model to the player's currently-focused car (drive
             # into the onnx car and click LINK). Freeroam/attach only.
-            if self.screen_mode or not getattr(self.world, "attached", False):
-                self.set_banner("LINK needs freeroam/attach mode (tech.key)")
+            if not getattr(self.world, "attached", False):
+                self.set_banner("LINK needs freeroam/attach mode")
                 return
             if self.engaged:
                 self.disengage("re-link")
@@ -641,10 +657,7 @@ class App:
             self.wheelbase = self.world.wheelbase_m
             self._cam_height = self.world.cam_height_m
             self.cfg.wheelbase_m = self.wheelbase
-            self.calib = Calibration(image_w=CAM_W, image_h=CAM_H,
-                                     fov_h_deg=CAM_FOV_H_DEG,
-                                     height_m=self._cam_height,
-                                     lateral_sign=CAM_LATERAL_SIGN)
+            self.calib = self._build_calib()
             self.queue = FrameQueue()
             self.lat.reset()
             self.long.reset()
@@ -739,7 +752,7 @@ class App:
         self.lat.reset()
         self.long.reset()
         self.engaged = True
-        if self.screen_mode and not self.lp.trusted():
+        if self.hybrid_mode and not self.lp.trusted():
             self.set_banner("ENGAGED - steering rack is learning; expect "
                             "a wobble for the first ~1-2 min", 5.0)
         else:
@@ -1018,13 +1031,14 @@ class App:
                                      actual_wheel_angle=wheel,
                                      lane_change_command_active=lane_change_cmd,
                                      dt=dt)
-            if self.screen_mode and wheel is not None:
-                # screen mode has no CAL and no telemetry: learn the
-                # axis->wheel rack online from our own command vs the
-                # model-observed yaw — upstream simsteer's gamepad-mode
-                # design. (The tech-mode ban on online rack learning
-                # is about CAL being the sole writer; here CAL cannot
-                # exist.)
+            if (self.hybrid_mode and not self.lp.trusted()
+                    and wheel is not None):
+                # hybrid freeroam has no CAL: learn the axis->wheel rack
+                # online from our own command vs the model-observed yaw
+                # (upstream simsteer's gamepad-mode design). The tech-mode
+                # ban on online rack learning is about CAL being the sole
+                # writer; here CAL cannot exist. A trusted (prior-CAL'd)
+                # rack skips this and is treated as a measured constant.
                 self.lp.update(steer, v_ego, wheel,
                                commanded_axis=steer)
             m_thr, m_brk = self._manual_pedals()
@@ -1455,14 +1469,15 @@ def main() -> int:
                     help="with --split: path to a driving_vision .onnx")
     ap.add_argument("--policy", default=None,
                     help="with --split: path to a driving_policy .onnx")
-    ap.add_argument("--screen", action="store_true",
-                    help="no-tech.key mode: capture the game window "
-                         "(hood cam) and drive via a virtual wheel — "
-                         "no beamngpy")
+    ap.add_argument("--hybrid", action="store_true",
+                    help="no-tech.key mode: beamngpy for scenario / "
+                         "control / real speed, camera from screen "
+                         "capture (the one tech-gated sensor)")
     ap.add_argument("--window", default="BeamNG",
-                    help="with --screen: window title/class substring")
+                    help="with --hybrid: window title/class substring "
+                         "to capture")
     ap.add_argument("--fov", type=float, default=90.0,
-                    help="with --screen: horizontal FOV (deg) of the "
+                    help="with --hybrid: horizontal FOV (deg) of the "
                          "in-game hood cam")
     ap.add_argument("--classic", action="store_true",
                     help="use the legacy hand-drawn cv2 UI instead of "
@@ -1533,10 +1548,11 @@ def main() -> int:
             t_c = time.monotonic()
             tel = app.tel.snapshot()
             v_ego = tel["v_ego"]
-            if app.screen_mode:
+            if getattr(app.world, "no_telemetry", False):
                 # no telemetry: the model's own ego-speed estimate
                 # (pose vx, 0.5%-accurate vs ground truth in tech
-                # mode) is the speed source, lightly filtered
+                # mode) is the speed source, lightly filtered. Hybrid
+                # mode has real wheelspeed, so this never fires there.
                 app._vision_v += 0.25 * (
                     max(0.0, float(d.pose[0])) - app._vision_v)
                 v_ego = app._vision_v
@@ -1666,9 +1682,9 @@ def main() -> int:
             pass
         try:
             # persist the converged per-vehicle speed scale for the
-            # next session's warm-start (skip screen mode: no telemetry
-            # speed, so the live scale never leaves 1.0 meaningfully)
-            if not app.screen_mode:
+            # next session's warm-start (skip only if there's no
+            # telemetry speed, so the live scale never leaves 1.0)
+            if not getattr(app.world, "no_telemetry", False):
                 save_speed_scale(app._game_key, app.long.speed_scale)
                 save_understeer_ff(app._game_key, app.lat.understeer_ff)
         except Exception:
