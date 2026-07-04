@@ -309,10 +309,13 @@ class ControllerConfig:
     # the clip with delivery still 0.68) — the table's engine promise
     # is that far off in high gears.
     accel_fb_clip: float = 1.2
-    # Hard clamp on the commanded acceleration — openpilot's ISO
-    # comfort limits (ACCEL_MAX/ACCEL_MIN). AEB is exempt.
+    # Hard clamp on the commanded acceleration. Raised the decel floor
+    # -3.5 -> -4.2 (2026-07-03): the model plans stops down to ~-4.1 and
+    # the old -3.5 clamped its hard red-light braking, contributing to
+    # overshoot. -4.2 lets the model's own planned braking through while
+    # staying short of the AEB range. AEB is exempt.
     accel_cmd_max_mps2: float = 2.0
-    accel_cmd_min_mps2: float = -3.5
+    accel_cmd_min_mps2: float = -4.2
     # E2E decel envelope (exp mode) — OFF by default (2026-07-03). It
     # was added to soften phantom hard-stops, but those came from the
     # speed under-read, which is now fixed at the source (the plan
@@ -330,18 +333,20 @@ class ControllerConfig:
     # ~1.14 with headroom without letting a bad pose reading bolt.
     e2e_speed_scale_max: float = 1.3
     # Longitudinal jerk limits (m/s^3): rate-limit the accel command so
-    # pedal transitions are deliberate, not stabs — this is what gives
-    # openpilot its "weighted" long feel. Asymmetric: releasing toward
-    # positive (brake off / throttle build) may move faster than
-    # ramping the brake in, so post-AEB recovery isn't sluggish.
-    accel_jerk_down_mps3: float = 2.5
+    # pedal transitions are deliberate, not stabs. Asymmetric the SAFE
+    # way (fixed 2026-07-03): braking BUILDS fast (jerk_down) so a stop
+    # demand isn't sluggish, and RELEASES more gently (jerk_up). The old
+    # 2.5/4.0 was backwards — it took ~1.4 s to ramp into full braking,
+    # so hard red-light stops arrived a second late and overshot (logged
+    # frame 37995: model demanded -2.1 while a_cmd was still +0.4, only
+    # reaching -2.3 a full second later). Gentle slowdowns (small
+    # demand) barely touch these limits; they only bite on hard stops.
+    accel_jerk_down_mps3: float = 5.0
     accel_jerk_up_mps3: float = 4.0
-    # First-order smoothing on the accel command — the exact mechanism
-    # openpilot uses (modeld LONG_SMOOTH_SECONDS = 0.3): the plan's
-    # frame-to-frame accel fluctuations get filtered before actuation,
-    # so the brake pedal is heavy and deliberate instead of twitchy.
-    # 0 disables. AEB bypasses it.
-    long_smooth_s: float = 0.3
+    # First-order smoothing on the accel command (openpilot modeld
+    # LONG_SMOOTH_SECONDS). Kept modest so it doesn't re-add the braking
+    # lag the jerk fix removed. 0 disables. AEB bypasses it.
+    long_smooth_s: float = 0.2
     # P term on velocity error (m/s^2 commanded per m/s of error). Keeps
     # the loop tracking the plan's velocity when the FF accel alone
     # under/overshoots.

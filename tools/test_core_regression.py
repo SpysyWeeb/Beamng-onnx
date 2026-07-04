@@ -77,6 +77,30 @@ def test_speed_scale_persistence():
     os.remove(os.path.join(str(data_dir()), f"speed_scale_{key}.json"))
 
 
+def test_brake_ramp_responsive():
+    # A sudden hard-stop demand must build braking quickly, not crawl in
+    # over a second (the red-light-overshoot bug). From a coast, a -3.5
+    # a_target should drive a_cmd past -2.0 within ~0.5 s (10 frames).
+    cfg = ControllerConfig()
+    lc = LongitudinalController(cfg)
+    lc.compute(mk(20.0), 20.0, mode="exp")          # coasting steady
+    # model now plans a hard stop (plan accel col 6 = -3.5); ego hasn't
+    # slowed yet, so a_cmd must ramp in fast
+    d = mk(20.0)
+    d.plan[:, 6] = -3.5
+    frames_to_2 = None
+    for i in range(30):
+        lc.compute(d, 20.0, mode="exp")
+        if frames_to_2 is None and lc.last_a_cmd <= -2.0:
+            frames_to_2 = i + 1
+    check("hard-stop braking builds within ~0.5s (not 1.4s)",
+          frames_to_2 is not None and frames_to_2 <= 12,
+          f"reached -2.0 m/s^2 in {frames_to_2} frames "
+          f"({(frames_to_2 or 99) * 50}ms)")
+    check("decel floor lets the model's ~-4 m/s^2 stops through",
+          cfg.accel_cmd_min_mps2 <= -4.0, f"floor={cfg.accel_cmd_min_mps2}")
+
+
 def test_fb_integrator_gate():
     cfg = ControllerConfig()
     lc = LongitudinalController(cfg)
@@ -213,6 +237,7 @@ def test_action_head_override():
 if __name__ == "__main__":
     test_corner_scanner()
     test_speed_scale_persistence()
+    test_brake_ramp_responsive()
     test_fb_integrator_gate()
     test_no_vision_intervention()
     test_curvature_clip()
