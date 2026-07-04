@@ -15,9 +15,9 @@ small camera on the player's car.
 
 Usage (BeamNG.drive, no tech.key):
   # you already have the game running:
-  .venv/bin/python3 tools/probe_nokey.py
+  .venv\\Scripts\\python tools/probe_nokey.py
   # or let the probe launch it for you:
-  .venv/bin/python3 tools/probe_nokey.py --launch
+  .venv\\Scripts\\python tools/probe_nokey.py --launch
 """
 from __future__ import annotations
 

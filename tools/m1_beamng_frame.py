@@ -9,7 +9,7 @@ what the model sees. Saves debug images so the warp can be eyeballed:
     debug_out/narrow.png  — the medmodel view the model actually gets
     debug_out/wide.png    — the sbigmodel view
 
-Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+Usage (BeamNG running via launch_beamng.bat):
     python tools/m1_beamng_frame.py [--seconds 6] [--ai]
 """
 
@@ -51,16 +51,16 @@ def main() -> int:
 
     world = BeamNGOnnxWorld()
 
-    print("[m1] loading model (ROCm -> CPU fallback) ...", flush=True)
+    print("[m1] loading model (DirectML -> CPU fallback) ...", flush=True)
     if args.supercombo:
         model = SupercomboModel(
-            providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+            providers=["DmlExecutionProvider", "CPUExecutionProvider"],
             intra_op_threads=3)
         step_decode = lambda i, b: model.decode(model.step(i, b))
         print(f"[m1] supercombo {model.checkpoint} on {model.active_provider}",
               flush=True)
     else:
-        model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+        model = DrivingModel(providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                              policy_providers=["CPUExecutionProvider"],
                              intra_op_threads=3)
         step_decode = lambda i, b: decode(*model.step(i, b))

@@ -9,7 +9,7 @@ view's ~59 deg HFOV; we render 100 deg so the narrow ~31 deg crop still
 maps ~516 source px onto the model's 512-wide input at 1664x832.
 
 BeamNG must already be running with the tech server:
-    launch_beamng.bat / bash launch_beamng.sh     (from this repo)
+    launch_beamng.bat     (from this repo)
 """
 
 from __future__ import annotations

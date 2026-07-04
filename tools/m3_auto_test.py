@@ -8,7 +8,7 @@ Runs the control panel's App headless (no window):
   4. Report: lane-center offset, inner-lane confidence, speed, steering
      activity. FAILs loudly on speed collapse (crash) or lost lanes.
 
-Usage: .venv/bin/python3 tools/m3_auto_test.py [--seconds 120] [--cap 20]
+Usage: .venv\\Scripts\\python tools/m3_auto_test.py [--seconds 120] [--cap 20]
 """
 
 from __future__ import annotations

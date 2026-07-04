@@ -10,7 +10,7 @@ tech-gated feature); map/vehicle/traffic/freeroam work either way:
              FOV field so the warp matches the in-game view).
 
 All state and the launch flow live in tools/launcher_core.py; this
-file is only the view. Run: .venv/bin/python3 tools/start_panel.py
+file is only the view. Run: .venv\\Scripts\\python tools/start_panel.py
 """
 from __future__ import annotations
 
@@ -147,12 +147,12 @@ class StartView:
         dpg.create_context()
         with dpg.font_registry():
             # a real TTF for crisp text at size; fall back to default
+            fonts = os.path.join(
+                os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
             fpath = None
-            for cand in ("/usr/share/fonts/dejavu-sans-fonts/"
-                         "DejaVuSans.ttf",
-                         "/usr/share/fonts/truetype/dejavu/"
-                         "DejaVuSans.ttf",
-                         "/usr/share/fonts/dejavu/DejaVuSans.ttf"):
+            for cand in (os.path.join(fonts, "segoeui.ttf"),
+                         os.path.join(fonts, "calibri.ttf"),
+                         os.path.join(fonts, "arial.ttf")):
                 if os.path.isfile(cand):
                     fpath = cand
                     break

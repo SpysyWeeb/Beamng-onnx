@@ -8,9 +8,9 @@ A fork of [140er/simsteer](https://github.com/140er/simsteer)
 rebuilt around BeamNG. Upstream drives ETS2 / Forza / Assetto Corsa on
 Windows; this fork keeps simsteer's model core (warp, preprocessing,
 decode, learners) and replaces all of the I/O. It lives on two
-branches: **`windows` (this one)** and **`linux`** — same code, with
-the platform bits (window capture, game launch, path detection)
-dispatched per OS. There are **two ways to feed and drive the game:**
+branches, each self-contained for its platform: **`windows` (this
+one)** and **`linux`**. There are **two ways to feed and drive the
+game:**
 
 | | **tech mode** (BeamNG.tech license) | **hybrid mode** (any BeamNG, no key) |
 |---|---|---|
@@ -29,8 +29,8 @@ one edge is the independent `Camera` render (film the AI car from any
 angle while it drives); hybrid's camera is whatever's on your monitor,
 so set the driver view to the **hood cam**.
 
-Inference runs on onnxruntime — **DirectML** (any DX12 GPU) on Windows,
-**ROCm** (AMD GPU) on Linux — with CPU fallback.
+Inference runs on onnxruntime — **DirectML** (any DX12 GPU) — with CPU
+fallback.
 
 ## How it works
 
@@ -104,9 +104,10 @@ pipeline at ~60 Hz, so this alone is enough to drive — no GPU setup.
 
 **3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. Any recent
 version; you do **not** need a `tech.key` (hybrid mode covers that). The
-start panel auto-detects the install through the Steam registry entry
-and every Steam library in `libraryfolders.vdf`, or you type the install
-directory in.
+start panel auto-detects Steam installs (registry entry + every Steam
+library in `libraryfolders.vdf`); for anything else — a standalone
+BeamNG.tech, a non-Steam drive — just type the install directory into
+the panel's **BeamNG install** field (it's saved for next time).
 
 **4. Models** — the driving models **ship with the repo** under
 `models/supercombo/` and `models/split/`, so there's nothing to fetch
@@ -176,59 +177,8 @@ first and falls back to CPU automatically, so `start.bat` is unchanged.
 (The policy head of split models stays on CPU by design — an opset-20
 op the DML EP rejects, and at ~3 ms it isn't the bottleneck.)
 
-<details>
-<summary><b>Linux GPU (ROCm) — applies to the <code>linux</code>
-branch</b></summary>
-
-**On a normal (mutable) distro** — Ubuntu, Arch, regular Fedora, … —
-install ROCm on the host and swap the runtime:
-
-```bash
-uv pip uninstall onnxruntime
-uv pip install onnxruntime-rocm==1.22.2
-```
-
-plus the ROCm 6.4 runtime libs (`hipblas rocblas miopen-hip
-hip-runtime-amd hipfft hipsparse hiprand rocrand rccl roctracer
-hipsolver rocsolver rocfft` from repo.radeon.com), then
-`echo /opt/rocm/lib | sudo tee /etc/ld.so.conf.d/rocm.conf && sudo
-ldconfig`. It falls back to CPU automatically if anything is missing —
-`./start.sh` is unchanged.
-
-**On an immutable/atomic distro** — Bazzite, Silverblue, Kinoite, … —
-you can't install those ROCm libs onto the host, so they go in a
-[distrobox](https://distrobox.it/): a mutable container that shares your
-home directory. **The game and start panel still run on the host; only
-the control panel (the model runner) runs in the container**, talking to
-BeamNG over the local beamngpy socket.
-
-```bash
-# uv keeps Python under ~/.local, so the SAME .venv runs from both the
-# host and the container (they share your home dir)
-uv venv .venv --python 3.12 && uv pip install -r requirements.txt
-
-# a mutable box to hold ROCm + the GPU runtime
-distrobox create --name onnx-runner --image ubuntu:24.04
-distrobox enter onnx-runner
-#   inside: install the ROCm libs above + `uv pip install onnxruntime-rocm`
-exit
-```
-
-Then point the start panel at the box by adding one key to
-`launcher_beamng.json` (created on first run) — this is the *only*
-difference from the host setup:
-
-```json
-"panel_cmd_prefix": ["distrobox", "enter", "onnx-runner", "--", "bash",
-  "-c", "cd ~/Beamng-onnx && exec .venv/bin/python3 tools/control_panel.py \"$@\"", "--"]
-```
-
-**If you run on CPU, or on a mutable distro, ignore all of this** — leave
-`panel_cmd_prefix` unset and everything runs on the host. The distrobox
-is only the intersection of "immutable OS" and "want GPU"; nothing in the
-code requires it.
-
-</details>
+(On Linux — the `linux` branch — the GPU path is ROCm instead; see that
+branch's README.)
 
 ## Running
 
@@ -238,7 +188,9 @@ code requires it.
 start.bat           # (or: .venv\Scripts\python tools\start_panel.py)
 ```
 
-It auto-detects your BeamNG install and tech.key and reshapes itself:
+It auto-detects your BeamNG install and tech.key (looked for in the
+install dir — the root and next to the `Bin64` exe) and reshapes
+itself:
 
 - **tech.key present** → pick map, vehicle, and traffic. It launches
   the game with the tech server, waits for a real beamngpy handshake
@@ -256,8 +208,7 @@ Both spawns are detached, so closing the launcher (it auto-closes ~3 s
 after START) never takes down the game or panel. The control panel logs
 to `debug_out/control_panel_last.log`.
 
-**Manual pieces** (`python` = `.venv\Scripts\python`; on Linux use
-`launch_beamng.sh`):
+**Manual pieces** (`python` = `.venv\Scripts\python`):
 
 ```bat
 launch_beamng.bat                           :: BeamNG + tech server

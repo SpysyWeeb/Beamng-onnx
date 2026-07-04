@@ -8,7 +8,7 @@ lane confidence / curvature / reach / rate.
 
 Drive the car yourself in BeamNG, or pass --ai to let BeamNG's AI drive.
 
-Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+Usage (BeamNG running via launch_beamng.bat):
     python tools/live_view.py [--ai] [--scale 0.8]
 
 Keys in the window:  q or ESC — quit
@@ -61,16 +61,16 @@ def main() -> int:
     # level-load churn (the window that faulted GPU compute on RDNA4).
     world = BeamNGOnnxWorld()
 
-    print("[view] loading model (ROCm -> CPU fallback) ...", flush=True)
+    print("[view] loading model (DirectML -> CPU fallback) ...", flush=True)
     if args.supercombo:
         model = SupercomboModel(
-            providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+            providers=["DmlExecutionProvider", "CPUExecutionProvider"],
             intra_op_threads=3)
         step_decode = lambda i, b: model.decode(model.step(i, b))
         print(f"[view] supercombo {model.checkpoint} on {model.active_provider}",
               flush=True)
     else:
-        model = DrivingModel(providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+        model = DrivingModel(providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                              policy_providers=["CPUExecutionProvider"],
                              intra_op_threads=3)
         step_decode = lambda i, b: decode(*model.step(i, b))

@@ -11,7 +11,7 @@ openpilot's convention: positive curvature = LEFT turn (z-up, CCW+).
 BeamNG world is z-up with heading atan2(dir_y, dir_x), so heading
 INCREASING = CCW = LEFT there too.
 
-Usage: .venv/bin/python3 tools/m3_sign_check.py
+Usage: .venv\\Scripts\\python tools/m3_sign_check.py
 """
 
 from __future__ import annotations

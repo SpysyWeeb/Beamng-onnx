@@ -26,7 +26,7 @@ Keys:
     r run auto-calibration  -/= max speed down/up
     ESC quit (sends neutral control)
 
-Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+Usage (BeamNG running via launch_beamng.bat):
     python tools/control_panel.py [--split] [--scale 0.8]
 """
 
@@ -418,7 +418,7 @@ class App:
 
         if args.split:
             self.model = DrivingModel(
-                providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+                providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                 policy_providers=["CPUExecutionProvider"], intra_op_threads=3,
                 vision_path=getattr(args, "vision", None) or None,
                 policy_path=getattr(args, "policy", None) or None)
@@ -430,7 +430,7 @@ class App:
         else:
             model_path = getattr(args, "model", None) or None
             self.model = SupercomboModel(
-                providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+                providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                 intra_op_threads=3, model_path=model_path,
                 lat_action_t=cfg.lookahead_s + cfg.curvature_anticipation_s,
                 long_action_t=cfg.lookahead_s + cfg.long_anticipation_s)

@@ -13,7 +13,6 @@ Two run modes:
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -23,22 +22,14 @@ import sys
 import threading
 import time
 
-IS_WINDOWS = os.name == "nt"
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "launcher_beamng.json")
 TECH_PORT = 64256
 DEFAULT_MODEL = os.path.join(ROOT, "models", "supercombo",
                              "driving_supercombo.onnx")
 
-STEAM_CANDIDATES = [
-    "~/.local/share/Steam/steamapps/common/BeamNG.drive",
-    "~/.steam/steam/steamapps/common/BeamNG.drive",
-    "~/.local/share/Steam/steamapps/common/BeamNG.tech",
-]
 
-
-def _windows_steam_libraries() -> list[str]:
+def _steam_libraries() -> list[str]:
     """Every Steam library root on this machine: the install dir from
     the registry (plus the stock location as fallback), expanded through
     steamapps/libraryfolders.vdf so games on other drives are found."""
@@ -84,40 +75,24 @@ VEHICLE_LABELS = {"bastion": "bastion (sedan)", "pickup": "D-Series (truck)"}
 
 
 def detect_beamng() -> str:
-    if IS_WINDOWS:
-        for lib in _windows_steam_libraries():
-            for name in ("BeamNG.drive", "BeamNG.tech"):
-                p = os.path.join(lib, "steamapps", "common", name)
-                if os.path.isdir(p):
-                    return p
-        return ""
-    for p in STEAM_CANDIDATES:
-        p = os.path.expanduser(p)
-        if os.path.isdir(p):
-            return p
+    """First BeamNG.drive / BeamNG.tech found in any Steam library.
+    Only a default — the start panel's install field overrides it for
+    installs that live anywhere else (e.g. a standalone BeamNG.tech)."""
+    for lib in _steam_libraries():
+        for name in ("BeamNG.drive", "BeamNG.tech"):
+            p = os.path.join(lib, "steamapps", "common", name)
+            if os.path.isdir(p):
+                return p
     return ""
 
 
 def detect_tech_key(install: str) -> bool:
-    cands = [os.path.join(install, "tech.key")] if install else []
-    if IS_WINDOWS:
-        # Userfolder moved over the years: %LOCALAPPDATA%\BeamNG.drive
-        # (0.32+, with per-version subfolders) vs Documents\BeamNG.drive
-        # (older). tech.key sits in the userfolder root or a version dir.
-        local = os.environ.get(
-            "LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
-        docs = os.path.expanduser(r"~\Documents")
-        for base in (os.path.join(local, "BeamNG.drive"),
-                     os.path.join(local, "BeamNG.tech"),
-                     os.path.join(docs, "BeamNG.drive")):
-            cands.append(os.path.join(base, "tech.key"))
-            cands += glob.glob(os.path.join(base, "*", "tech.key"))
-    else:
-        for d in ("BeamNG.tech", "BeamNG.drive"):
-            cands.append(os.path.expanduser(
-                f"~/.local/share/BeamNG/{d}/tech.key"))
-            cands.append(os.path.expanduser(
-                f"~/.local/share/BeamNG/{d}/current/tech.key"))
+    """tech.key lives in the install dir — next to the Bin64 exe or at
+    the install root — NOT in the userfolder."""
+    if not install:
+        return False
+    cands = (os.path.join(install, "tech.key"),
+             os.path.join(install, "Bin64", "tech.key"))
     return any(os.path.isfile(c) for c in cands)
 
 
@@ -182,9 +157,7 @@ def port_open(port: int = TECH_PORT) -> bool:
         s.close()
 
 
-BIN_RELS = (("Bin64/BeamNG.drive.x64.exe", "Bin64/BeamNG.tech.x64.exe")
-            if IS_WINDOWS else
-            ("BinLinux/BeamNG.drive.x64", "BinLinux/BeamNG.tech.x64"))
+BIN_RELS = ("Bin64/BeamNG.drive.x64.exe", "Bin64/BeamNG.tech.x64.exe")
 
 
 def find_binary(install: str) -> str | None:
@@ -197,13 +170,11 @@ def find_binary(install: str) -> str | None:
 
 def detached_popen_kwargs() -> dict:
     """Popen kwargs that detach the child from the launcher, so closing
-    the start panel never takes down the game or the control panel.
-    POSIX: a new session. Windows: a new process group (no Ctrl+C
-    propagation) and no inherited console window."""
-    if IS_WINDOWS:
-        return {"creationflags": (subprocess.CREATE_NEW_PROCESS_GROUP
-                                  | subprocess.CREATE_NO_WINDOW)}
-    return {"start_new_session": True}
+    the start panel never takes down the game or the control panel: a
+    new process group (no Ctrl+C propagation) and no inherited console
+    window."""
+    return {"creationflags": (subprocess.CREATE_NEW_PROCESS_GROUP
+                              | subprocess.CREATE_NO_WINDOW)}
 
 
 def launch_game_process(exe: str, cwd: str) -> None:
@@ -211,25 +182,17 @@ def launch_game_process(exe: str, cwd: str) -> None:
     deprioritized. -nosteam bypasses Steam auth; -tcom -tport start the
     tech server beamngpy connects to.
 
-    Deprioritized (nice +10 / BELOW_NORMAL_PRIORITY_CLASS) because
-    modeld runs a CPU-compiled model and must hold 20 Hz; BeamNG
-    saturating all cores starved it to ~15 Hz, flagging modelV2 invalid
-    and cascading into commIssue soft-disables. Deprioritizing the game
-    lets modeld win the contested cycles."""
-    env = dict(os.environ)
-    cmd = [exe, "-nosteam", "-tcom", "-tport", str(TECH_PORT)]
+    BELOW_NORMAL_PRIORITY_CLASS because modeld runs a CPU-compiled model
+    and must hold 20 Hz; BeamNG saturating all cores starved it to
+    ~15 Hz, flagging modelV2 invalid and cascading into commIssue
+    soft-disables. Deprioritizing the game lets modeld win the contested
+    cycles."""
     kwargs = detached_popen_kwargs()
-    if IS_WINDOWS:
-        kwargs["creationflags"] |= subprocess.BELOW_NORMAL_PRIORITY_CLASS
-    else:
-        # nocompute: keep BeamNG off the GPU's async-compute queues —
-        # its async-compute work cohabiting with the model's queues hung
-        # the GPU (RDNA4 MES). Costs the game a few % render perf.
-        env["RADV_DEBUG"] = (env.get("RADV_DEBUG", "")
-                             + ",nocompute").lstrip(",")
-        cmd = ["nice", "-n", "10"] + cmd
-    subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, **kwargs)
+    kwargs["creationflags"] |= subprocess.BELOW_NORMAL_PRIORITY_CLASS
+    subprocess.Popen(
+        [exe, "-nosteam", "-tcom", "-tport", str(TECH_PORT)],
+        cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        **kwargs)
 
 
 class LauncherCore:
@@ -318,16 +281,13 @@ class LauncherCore:
         return prefix + args
 
     def _spawn_panel(self, args: list[str]) -> None:
-        env = dict(os.environ)
-        if not IS_WINDOWS:
-            env.setdefault("GLIBC_TUNABLES", "glibc.rtld.execstack=2")
         # capture the control panel's stdout/stderr — it's spawned
         # detached, so without this any crash is invisible (window
         # pops up and vanishes). Read debug_out/control_panel_last.log.
         os.makedirs(os.path.join(ROOT, "debug_out"), exist_ok=True)
         logf = open(os.path.join(ROOT, "debug_out",
                                  "control_panel_last.log"), "w")
-        subprocess.Popen(self._panel_cmd(args), cwd=ROOT, env=env,
+        subprocess.Popen(self._panel_cmd(args), cwd=ROOT,
                          stdout=logf, stderr=subprocess.STDOUT,
                          **detached_popen_kwargs())
         self.log("control panel log -> debug_out/control_panel_last.log")

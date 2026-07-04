@@ -9,8 +9,8 @@ maps, brake ramp, steering gain); traces together but wrong = the model
 asked for it (scene/model judgment).
 
 Usage:
-    .venv/bin/python3 tools/plot_run.py            # newest run log
-    .venv/bin/python3 tools/plot_run.py <log.csv>  # specific log
+    .venv\\Scripts\\python tools/plot_run.py            # newest run log
+    .venv\\Scripts\\python tools/plot_run.py <log.csv>  # specific log
 Writes <log>.png next to the CSV.
 """
 

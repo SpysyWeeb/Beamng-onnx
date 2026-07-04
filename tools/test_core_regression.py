@@ -4,7 +4,7 @@ Replaces upstream's tools/test_* suite (which tested the deleted
 `pilot/` package). Everything here runs against simsteer.core with
 synthetic Decoded frames — no game, no model files.
 
-    .venv/bin/python3 tools/test_core_regression.py
+    .venv\\Scripts\\python tools/test_core_regression.py
 """
 import os
 import sys

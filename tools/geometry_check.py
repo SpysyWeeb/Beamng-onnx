@@ -16,7 +16,7 @@ BeamNG AI drives; we compare per frame:
 Healthy: vx ratio 1.00 +/- 0.05 (upstream: >1.05 = declared FOV too
 high, <0.95 = too low).
 
-Usage: .venv/bin/python3 tools/geometry_check.py [--seconds 75]
+Usage: .venv\\Scripts\\python tools/geometry_check.py [--seconds 75]
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def main() -> int:
 
     world = BeamNGOnnxWorld()
     model = SupercomboModel(
-        providers=["ROCMExecutionProvider", "CPUExecutionProvider"],
+        providers=["DmlExecutionProvider", "CPUExecutionProvider"],
         intra_op_threads=3)
     queue = FrameQueue()
     world.ai_drive(15.0)

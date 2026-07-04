@@ -13,7 +13,7 @@ for each, and prints geometry checks:
     the declared FOV matches the render.
 
 Usage:
-    .venv/bin/python3 tools/camera_probe.py
+    .venv\\Scripts\\python tools/camera_probe.py
 """
 
 from __future__ import annotations
