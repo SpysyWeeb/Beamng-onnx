@@ -4,11 +4,13 @@ Drive **BeamNG** with comma.ai's openpilot driving models — no
 openpilot install, just the ONNX files and onnxruntime. The model
 steers and works the pedals end-to-end; you watch it drive.
 
-A Linux-only fork of [140er/simsteer](https://github.com/140er/simsteer)
+A fork of [140er/simsteer](https://github.com/140er/simsteer)
 rebuilt around BeamNG. Upstream drives ETS2 / Forza / Assetto Corsa on
 Windows; this fork keeps simsteer's model core (warp, preprocessing,
-decode, learners) and replaces all of the I/O. There are **two ways to
-feed and drive the game:**
+decode, learners) and replaces all of the I/O. It lives on two
+branches: **`windows` (this one)** and **`linux`** — same code, with
+the platform bits (window capture, game launch, path detection)
+dispatched per OS. There are **two ways to feed and drive the game:**
 
 | | **tech mode** (BeamNG.tech license) | **hybrid mode** (any BeamNG, no key) |
 |---|---|---|
@@ -27,7 +29,8 @@ one edge is the independent `Camera` render (film the AI car from any
 angle while it drives); hybrid's camera is whatever's on your monitor,
 so set the driver view to the **hood cam**.
 
-Inference runs on onnxruntime **ROCm** (AMD GPU) with CPU fallback.
+Inference runs on onnxruntime — **DirectML** (any DX12 GPU) on Windows,
+**ROCm** (AMD GPU) on Linux — with CPU fallback.
 
 ## How it works
 
@@ -77,31 +80,32 @@ free beamngpy.
 ## How to install
 
 From nothing to driving on **CPU** (a GPU is optional — see *GPU
-acceleration* below). This works on any Linux distro, immutable ones
-included, with no container.
+acceleration* below).
 
-**1. Clone** the Linux fork (it lives on the `linux` branch):
+**1. Clone** the Windows fork (it lives on the `windows` branch; Linux
+users: `-b linux` instead):
 
-```bash
-git clone -b linux https://github.com/SpysyWeeb/Beamng-onnx
+```bat
+git clone -b windows https://github.com/SpysyWeeb/Beamng-onnx
 cd Beamng-onnx
 ```
 
 **2. Python 3.12 environment + dependencies:**
 
-```bash
-uv venv .venv --python 3.12          # or: python3.12 -m venv .venv
-uv pip install -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
+```bat
+py -3.12 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
 ```
 
 `requirements.txt` is complete: numpy, opencv, beamngpy, onnxruntime,
-plus `dearpygui` (the UIs) and `python-xlib` (hybrid-mode capture). CPU
-inference runs the whole pipeline at ~60 Hz, so this alone is enough to
-drive — no GPU, no container.
+plus `dearpygui` (the UIs). Hybrid-mode window capture uses the Win32
+API directly (ctypes) — no extra package. CPU inference runs the whole
+pipeline at ~60 Hz, so this alone is enough to drive — no GPU setup.
 
 **3. BeamNG** — install BeamNG.drive (Steam) or BeamNG.tech. Any recent
 version; you do **not** need a `tech.key` (hybrid mode covers that). The
-start panel auto-detects the common Steam paths, or you type the install
+start panel auto-detects the install through the Steam registry entry
+and every Steam library in `libraryfolders.vdf`, or you type the install
 directory in.
 
 **4. Models** — the driving models **ship with the repo** under
@@ -112,12 +116,17 @@ is too large for GitHub — grab it separately only if you want it (see
 
 **5. Run:**
 
-```bash
-./start.sh
+```bat
+start.bat
 ```
 
 Pick your options and press **START**. On CPU that's the entire install
-— no container, no GPU setup.
+— no GPU setup.
+
+> **Hybrid-mode note:** the captured camera is the game window itself,
+> read per-window via `PrintWindow` — so it works even with other
+> windows on top, but **not** in *exclusive* fullscreen (which bypasses
+> the compositor). Run BeamNG windowed or borderless-fullscreen.
 
 ### Models
 
@@ -151,10 +160,25 @@ comma's weights come from **GitLab** (`gitlab.com/commaai/openpilot-lfs`),
 not GitHub — pull the pointer from `raw.githubusercontent`, then resolve
 the file through the GitLab LFS `objects/batch` API.
 
-### GPU acceleration (optional) — and the distrobox
+### GPU acceleration (optional)
 
-CPU is the default and is plenty (~60 Hz). For AMD-GPU (ROCm)
-acceleration there are two cases:
+CPU is the default and is plenty (~60 Hz). On Windows the GPU path is
+**DirectML** — one package swap, works on any DX12 GPU (AMD, NVIDIA,
+Intel):
+
+```bat
+.venv\Scripts\pip uninstall onnxruntime
+.venv\Scripts\pip install onnxruntime-directml
+```
+
+That's it — the model core already asks for `DmlExecutionProvider`
+first and falls back to CPU automatically, so `start.bat` is unchanged.
+(The policy head of split models stays on CPU by design — an opset-20
+op the DML EP rejects, and at ~3 ms it isn't the bottleneck.)
+
+<details>
+<summary><b>Linux GPU (ROCm) — applies to the <code>linux</code>
+branch</b></summary>
 
 **On a normal (mutable) distro** — Ubuntu, Arch, regular Fedora, … —
 install ROCm on the host and swap the runtime:
@@ -204,12 +228,14 @@ difference from the host setup:
 is only the intersection of "immutable OS" and "want GPU"; nothing in the
 code requires it.
 
+</details>
+
 ## Running
 
 **Easiest path — the start panel:**
 
-```bash
-./start.sh          # (or: python tools/start_panel.py)
+```bat
+start.bat           # (or: .venv\Scripts\python tools\start_panel.py)
 ```
 
 It auto-detects your BeamNG install and tech.key and reshapes itself:
@@ -230,18 +256,19 @@ Both spawns are detached, so closing the launcher (it auto-closes ~3 s
 after START) never takes down the game or panel. The control panel logs
 to `debug_out/control_panel_last.log`.
 
-**Manual pieces:**
+**Manual pieces** (`python` = `.venv\Scripts\python`; on Linux use
+`launch_beamng.sh`):
 
-```bash
-bash launch_beamng.sh                       # host: BeamNG + tech server
+```bat
+launch_beamng.bat                           :: BeamNG + tech server
 
-python tools/control_panel.py               # tech mode, scripted west_coast_usa
-python tools/control_panel.py --attach      # hook the car already in-game
-python tools/control_panel.py --hybrid --fov 100  # no-key: beamngpy + screen camera
+python tools/control_panel.py               :: tech mode, scripted west_coast_usa
+python tools/control_panel.py --attach      :: hook the car already in-game
+python tools/control_panel.py --hybrid --fov 100  :: no-key: beamngpy + screen camera
 python tools/control_panel.py --model models/big_driving_supercombo.onnx
 python tools/control_panel.py --split --vision <v.onnx> --policy <p.onnx>
-python tools/control_panel.py --classic     # legacy hand-drawn cv2 UI
-python tools/live_view.py --supercombo      # overlay viewer; drive manually
+python tools/control_panel.py --classic     :: legacy hand-drawn cv2 UI
+python tools/live_view.py --supercombo      :: overlay viewer; drive manually
 ```
 
 **Controls** (panel buttons or keys): `e` engage · `l` long-mode cycle
@@ -365,6 +392,7 @@ vehicle's calibration never bleeds into another's.
 
 simsteer's [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) still describes
 the model core accurately (what's a comma port vs simsteer's own).
-SETUP/TUNING are Windows-specific and don't apply here.
+SETUP/TUNING cover upstream's ETS2 / Forza / Assetto targets and don't
+apply to the BeamNG fork.
 
 MIT, same as upstream. Models are comma.ai's.

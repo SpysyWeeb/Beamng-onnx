@@ -26,8 +26,8 @@ Keys:
     r run auto-calibration  -/= max speed down/up
     ESC quit (sends neutral control)
 
-Usage (BeamNG running via launch_beamng.sh):
-    .venv/bin/python3 tools/control_panel.py [--split] [--scale 0.8]
+Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+    python tools/control_panel.py [--split] [--scale 0.8]
 """
 
 from __future__ import annotations

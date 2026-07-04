@@ -1,12 +1,18 @@
-# Everything needed to run on CPU, any Linux distro:
-#   uv venv .venv --python 3.12 && uv pip install -r requirements.txt
+# Everything needed to run on CPU:
+#   Windows: py -3.12 -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+#   Linux:   uv venv .venv --python 3.12 && uv pip install -r requirements.txt
 numpy>=1.26,<2
 opencv-python>=4.10
 beamngpy>=1.35
 onnxruntime>=1.20
 dearpygui>=1.11        # the start panel + control panel UIs
-python-xlib>=0.33      # hybrid (no-tech.key) mode: per-window screen capture
+# hybrid (no-tech.key) mode per-window capture: X11 needs python-xlib;
+# Windows uses raw user32/gdi32 through ctypes (no extra package).
+python-xlib>=0.33; sys_platform == "linux"
 
-# Optional AMD GPU inference: replace onnxruntime with onnxruntime-rocm
-# (needs the ROCm 6.4 runtime libs — see README "ROCm" section).
+# Optional GPU inference — replace onnxruntime with ONE of:
+#   Windows (any DX12 GPU):  onnxruntime-directml
+#   Linux (AMD ROCm):        onnxruntime-rocm==1.22.2
+#     (needs the ROCm 6.4 runtime libs — see README "ROCm" section)
+# onnxruntime-directml
 # onnxruntime-rocm==1.22.2

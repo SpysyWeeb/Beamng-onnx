@@ -23,13 +23,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from launcher_core import (TECH_PORT, detect_beamng, find_binary,  # noqa: E402
-                           port_open)
+from launcher_core import (BIN_RELS, TECH_PORT, detect_beamng,  # noqa: E402
+                           find_binary, launch_game_process, port_open)
 
 
 def _ok(msg: str) -> None:
@@ -45,17 +44,11 @@ def launch_game(install: str) -> bool:
     tech port. Works for BeamNG.drive.x64 too (find_binary accepts it)."""
     exe = find_binary(install)
     if exe is None:
-        _no(f"no BinLinux binary under {install!r}")
+        _no(f"no {'/'.join(BIN_RELS)} binary under {install!r}")
         return False
     print(f"launching {os.path.basename(exe)} (tech server on "
           f"{TECH_PORT}) ...")
-    env = dict(os.environ)
-    env["RADV_DEBUG"] = (env.get("RADV_DEBUG", "") + ",nocompute").lstrip(",")
-    subprocess.Popen(
-        ["nice", "-n", "10", exe, "-nosteam", "-tcom",
-         "-tport", str(TECH_PORT)],
-        cwd=install, env=env, start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    launch_game_process(exe, install)
     t_end = time.monotonic() + 240
     while time.monotonic() < t_end and not port_open():
         time.sleep(2.0)

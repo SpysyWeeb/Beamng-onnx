@@ -8,8 +8,8 @@ lane confidence / curvature / reach / rate.
 
 Drive the car yourself in BeamNG, or pass --ai to let BeamNG's AI drive.
 
-Usage (inside the distrobox, BeamNG running via launch_beamng.sh):
-    .venv/bin/python3 tools/live_view.py [--ai] [--scale 0.8]
+Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+    python tools/live_view.py [--ai] [--scale 0.8]
 
 Keys in the window:  q or ESC — quit
 """

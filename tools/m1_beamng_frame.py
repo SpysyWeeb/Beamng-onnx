@@ -9,8 +9,8 @@ what the model sees. Saves debug images so the warp can be eyeballed:
     debug_out/narrow.png  — the medmodel view the model actually gets
     debug_out/wide.png    — the sbigmodel view
 
-Usage (inside the distrobox, BeamNG running via launch_beamng.sh):
-    .venv/bin/python3 tools/m1_beamng_frame.py [--seconds 6] [--ai]
+Usage (BeamNG running via launch_beamng.bat / launch_beamng.sh):
+    python tools/m1_beamng_frame.py [--seconds 6] [--ai]
 """
 
 from __future__ import annotations
