@@ -25,7 +25,7 @@ import dearpygui.dearpygui as dpg
 import control_panel as cp
 from control_panel import App, DESIRE_LEN, WARMUP_FRAMES, ROOT
 from simsteer.ui.overlay import draw_overlay
-from telemetry_panel import TelemetryPanel, W
+from telemetry_panel import TelemetryPanel, W, H as TP_H
 
 CAM_DW = 900                    # camera display width (px); height per aspect
 PLOT_H = 150
@@ -315,15 +315,20 @@ class ControlView:
 
         self._keymap()
         dpg.bind_theme(self._theme())
+        # Height must fit the whole stack: banner + camera (ch) + the
+        # telemetry row (the TP_H-tall panel dominates it) + speed-cap +
+        # two button rows + spacing/padding. Otherwise the telemetry is
+        # off-screen and the user has to drag the window taller.
+        vw = cw + 24
+        vh = ch + TP_H + 210
         dpg.create_viewport(title="Beamng-onnx control panel",
-                            width=cw + 24, height=ch + 430)
+                            width=vw, height=vh)
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.set_primary_window("root", True)
 
         # Freeroam gate: a dim overlay with a single LINK button covering
         # the (blurred-looking) panel until the model is bound to a car.
-        vw, vh = cw + 24, ch + 430
         with dpg.window(tag="link_gate", no_title_bar=True, no_move=True,
                         no_resize=True, no_scrollbar=True, no_collapse=True,
                         width=vw, height=vh, pos=(0, 0),
