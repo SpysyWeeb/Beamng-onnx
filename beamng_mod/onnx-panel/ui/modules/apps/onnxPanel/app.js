@@ -28,7 +28,20 @@ angular.module('beamng.apps')
       scope.desireUp = function () {
         if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
       };
-      scope.$on('$destroy', scope.desireUp);
+
+      // Gas/Brake nudge: while held, resend every 200 ms so the panel
+      // keeps applying 30% to that pedal (its window expires ~0.35 s
+      // after the last repeat). Release stops it.
+      var pedalTimer = null;
+      scope.pedalDown = function (cmd) {
+        scope.send(cmd);
+        if (pedalTimer) clearInterval(pedalTimer);
+        pedalTimer = setInterval(function () { scope.send(cmd); }, 200);
+      };
+      scope.pedalUp = function () {
+        if (pedalTimer) { clearInterval(pedalTimer); pedalTimer = null; }
+      };
+      scope.$on('$destroy', function () { scope.desireUp(); scope.pedalUp(); });
 
       // Status pushed by lua/ge/extensions/onnxPanel.lua via guihooks.
       scope.$on('OnnxPanelStatus', function (event, data) {

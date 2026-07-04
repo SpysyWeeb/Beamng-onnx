@@ -32,6 +32,10 @@
     .onnx-panel .onnx-engage.on  { background: rgba(190, 60, 50, 0.75); }
     .onnx-panel .onnx-engage.off { background: rgba(40, 150, 90, 0.75); }
     .onnx-panel .onnx-row { display: flex; gap: 6px; }
+    .onnx-panel .onnx-gas         { background: rgba(40, 150, 90, 0.55); }
+    .onnx-panel .onnx-gas:active  { background: rgba(40, 150, 90, 0.90); }
+    .onnx-panel .onnx-brake       { background: rgba(190, 60, 50, 0.55); }
+    .onnx-panel .onnx-brake:active{ background: rgba(190, 60, 50, 0.90); }
   </style>
 
   <div class="onnx-status">{{ status }}</div>
@@ -65,5 +69,12 @@
   <div class="onnx-row">
     <button ng-click="send('spd_dn')">SPD &minus;</button>
     <button ng-click="send('spd_up')">SPD +</button>
+  </div>
+
+  <div class="onnx-row">
+    <button class="onnx-brake" ng-mousedown="pedalDown('brake')"
+            ng-mouseup="pedalUp()" ng-mouseleave="pedalUp()">BRAKE</button>
+    <button class="onnx-gas" ng-mousedown="pedalDown('gas')"
+            ng-mouseup="pedalUp()" ng-mouseleave="pedalUp()">GAS</button>
   </div>
 </div>

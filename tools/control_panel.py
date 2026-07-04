@@ -165,7 +165,7 @@ class Telemetry(threading.Thread):
 
 MOD_PORT = 64257
 MOD_CMDS = {"engage", "lane_l", "lane_r", "turn_l", "turn_r", "long",
-            "cal", "ai", "spd_dn", "spd_up", "cam", "snap"}
+            "cal", "ai", "spd_dn", "spd_up", "cam", "snap", "gas", "brake"}
 
 
 class ControlSender(threading.Thread):
@@ -408,7 +408,7 @@ class App:
         # network match our real lat/long action timing.
         cfg = ControllerConfig.load(game=self._game_key)
         cfg.wheelbase_m = self.wheelbase
-        cfg.max_speed_mps = 55.0 / 2.237   # start on the 5-mph grid
+        cfg.max_speed_mps = 65.0 / 2.237   # default 65 mph (openpilot exp)
         self.cfg = cfg
 
         if args.split:
@@ -510,6 +510,10 @@ class App:
         self._incident_t = 0.0
         self.incident_note: str | None = None
         self._snap_req = False
+        # Manual pedal-nudge windows (Gas/Brake buttons): each expires
+        # ~0.35 s after the last button repeat, so releasing stops it.
+        self._manual_gas_until = 0.0
+        self._manual_brake_until = 0.0
         self._conf_low_t = 0.0
         self._conf_warned = False
         self._lc_committed = False
@@ -562,6 +566,17 @@ class App:
                            f"/100 samples — run CAL or drive manually)")
         return True, ""
 
+    def _manual_pedals(self):
+        """Gas/Brake button override: returns (throttle, brake) at 30%
+        while the button is held, else (None, None) to leave the model
+        (or the player, in long-off) in control."""
+        now = time.monotonic()
+        if now < self._manual_gas_until:
+            return 0.30, 0.0
+        if now < self._manual_brake_until:
+            return 0.0, 0.30
+        return None, None
+
     def action(self, key: str) -> None:
         now = time.monotonic()
         if key == "engage":
@@ -589,6 +604,17 @@ class App:
                 self.desire_until = now + DESIRE_HOLD_S[idx]
                 self.set_banner(f"desire: {DESIRE_NAME[idx]}")
             self._update_signal()
+        elif key in ("gas", "brake"):
+            # Manual pedal nudge: hold applies 30% to that pedal while
+            # the button repeats (widget resends every 300 ms); the
+            # window expires ~0.35 s after the last repeat. Overrides
+            # the model's long command for that pedal while held.
+            if key == "gas":
+                self._manual_gas_until = now + 0.35
+                self._manual_brake_until = 0.0
+            else:
+                self._manual_brake_until = now + 0.35
+                self._manual_gas_until = 0.0
         elif key == "long":
             order = ["exp", "chill", "off"]
             self.long_mode = order[(order.index(self.long_mode) + 1) % 3]
@@ -966,7 +992,13 @@ class App:
                 # exist.)
                 self.lp.update(steer, v_ego, wheel,
                                commanded_axis=steer)
-            if self.long_mode == "off":
+            m_thr, m_brk = self._manual_pedals()
+            if m_thr is not None:
+                # Gas/Brake button held — 30% override wins over both the
+                # model command and long-off passthrough.
+                thr, brk = m_thr, m_brk
+                self.sender.submit(steer, thr, brk)
+            elif self.long_mode == "off":
                 # steering only — no throttle/brake API calls, so the
                 # player's own pedal inputs pass through untouched
                 self.sender.submit(steer, None, None)
