@@ -8,7 +8,11 @@ dearpygui>=1.11        # the start panel + control panel UIs
 # (hybrid no-tech.key window capture uses raw user32/gdi32 through
 #  ctypes — no extra package needed)
 
-# Optional GPU inference (any DX12 GPU — AMD/NVIDIA/Intel):
-# replace onnxruntime with onnxruntime-directml. The code already
-# prefers DmlExecutionProvider and falls back to CPU automatically.
-# onnxruntime-directml
+# Optional GPU inference — replace onnxruntime with ONE of:
+#   NVIDIA (CUDA, fullest op coverage):
+#     pip install "onnxruntime-gpu[cuda,cudnn]"
+#   any DX12 GPU (AMD/NVIDIA/Intel, DirectML):
+#     pip install onnxruntime-directml
+# The code picks the best available provider automatically
+# (CUDA > DirectML > CPU) and falls back per-model if an EP
+# rejects one — no code changes either way.

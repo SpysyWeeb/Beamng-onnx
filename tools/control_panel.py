@@ -57,7 +57,7 @@ from simsteer.core.control import (ControllerConfig, LateralController,
                                    save_understeer_ff)
 from simsteer.core.learners.livecalib import LiveCalib
 from simsteer.core.learners.liveparams import LiveParams
-from simsteer.core.model import DrivingModel
+from simsteer.core.model import DrivingModel, gpu_providers
 from simsteer.core.postprocess import decode
 from simsteer.core.preprocess import FrameQueue
 from simsteer.core.supercombo import SupercomboModel
@@ -418,7 +418,7 @@ class App:
 
         if args.split:
             self.model = DrivingModel(
-                providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+                providers=gpu_providers(),
                 policy_providers=["CPUExecutionProvider"], intra_op_threads=3,
                 vision_path=getattr(args, "vision", None) or None,
                 policy_path=getattr(args, "policy", None) or None)
@@ -430,7 +430,7 @@ class App:
         else:
             model_path = getattr(args, "model", None) or None
             self.model = SupercomboModel(
-                providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+                providers=gpu_providers(),
                 intra_op_threads=3, model_path=model_path,
                 lat_action_t=cfg.lookahead_s + cfg.curvature_anticipation_s,
                 long_action_t=cfg.lookahead_s + cfg.long_anticipation_s)

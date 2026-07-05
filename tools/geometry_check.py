@@ -35,6 +35,7 @@ sys.path.insert(0, ROOT)
 np.seterr(divide="ignore", invalid="ignore")
 
 from simsteer.core.calibration import Calibration
+from simsteer.core.model import gpu_providers
 from simsteer.core.preprocess import FrameQueue
 from simsteer.core.supercombo import SupercomboModel
 from beamng.world import (BeamNGOnnxWorld, CAM_W, CAM_H, CAM_FOV_H_DEG,
@@ -68,7 +69,7 @@ def main() -> int:
 
     world = BeamNGOnnxWorld()
     model = SupercomboModel(
-        providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+        providers=gpu_providers(),
         intra_op_threads=3)
     queue = FrameQueue()
     world.ai_drive(15.0)

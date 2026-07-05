@@ -171,19 +171,32 @@ the file through the GitLab LFS `objects/batch` API.
 
 ### GPU acceleration (optional)
 
-CPU is the default and is plenty (~2x the needed rate). The GPU path is
-**DirectML** — one package swap, works on any DX12 GPU (AMD, NVIDIA,
-Intel):
+CPU is the default and is plenty (~2x the needed rate). GPU is one
+package swap; the code picks the best available provider automatically
+(**CUDA > DirectML > CPU**) and falls back per-model if a provider
+rejects one, so `start.bat` is unchanged either way.
+
+**NVIDIA (CUDA — preferred, fullest op coverage; runs every shipped
+model on the GPU):**
+
+```bat
+.venv\Scripts\pip uninstall onnxruntime
+.venv\Scripts\pip install "onnxruntime-gpu[cuda,cudnn]"
+```
+
+(The `[cuda,cudnn]` extras pull the CUDA/cuDNN runtime DLLs from pip —
+no CUDA toolkit install needed, just a reasonably current driver.)
+
+**Any DX12 GPU (AMD / Intel / NVIDIA — DirectML):**
 
 ```bat
 .venv\Scripts\pip uninstall onnxruntime
 .venv\Scripts\pip install onnxruntime-directml
 ```
 
-That's it — the model core already asks for `DmlExecutionProvider`
-first and falls back to CPU automatically, so `start.bat` is unchanged.
-(The policy head of split models stays on CPU by design — an opset-20
-op the DML EP rejects, and at ~3 ms it isn't the bottleneck.)
+DML note: it rejects some models at load (several supercombos and the
+split policy head) — those land on CPU automatically; the split vision
+encoder (the heavy half) does run on DML.
 
 (On Linux — the `linux` branch — the GPU path is ROCm instead; see that
 branch's README.)

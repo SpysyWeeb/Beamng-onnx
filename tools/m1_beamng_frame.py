@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from simsteer.core.calibration import Calibration
-from simsteer.core.model import DrivingModel
+from simsteer.core.model import DrivingModel, gpu_providers
 from simsteer.core.postprocess import decode, desired_curvature
 from simsteer.core.preprocess import FrameQueue, yuv6_to_bgr
 from simsteer.core.supercombo import SupercomboModel
@@ -51,16 +51,16 @@ def main() -> int:
 
     world = BeamNGOnnxWorld()
 
-    print("[m1] loading model (DirectML -> CPU fallback) ...", flush=True)
+    print("[m1] loading model (GPU -> CPU fallback) ...", flush=True)
     if args.supercombo:
         model = SupercomboModel(
-            providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+            providers=gpu_providers(),
             intra_op_threads=3)
         step_decode = lambda i, b: model.decode(model.step(i, b))
         print(f"[m1] supercombo {model.checkpoint} on {model.active_provider}",
               flush=True)
     else:
-        model = DrivingModel(providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+        model = DrivingModel(providers=gpu_providers(),
                              policy_providers=["CPUExecutionProvider"],
                              intra_op_threads=3)
         step_decode = lambda i, b: decode(*model.step(i, b))

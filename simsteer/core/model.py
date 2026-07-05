@@ -61,6 +61,23 @@ def _make_session(path: Path, providers: list[str],
                                     providers=["CPUExecutionProvider"])
 
 
+def gpu_providers() -> list[str]:
+    """Best available execution-provider stack, in preference order:
+    CUDA (onnxruntime-gpu) > DirectML (onnxruntime-directml) > CPU.
+    All GPU requests go through this so swapping the onnxruntime
+    package in the venv moves every model — no code changes. Combined
+    with _make_session's init fallback, requesting a GPU is always
+    safe: a model an EP rejects just lands on CPU."""
+    avail = ort.get_available_providers()
+    if "CUDAExecutionProvider" in avail and hasattr(ort, "preload_dlls"):
+        # onnxruntime-gpu >= 1.21: load the pip-installed CUDA/cuDNN
+        # DLLs (nvidia-* packages) into the process before session init.
+        ort.preload_dlls()
+    gpus = [p for p in ("CUDAExecutionProvider", "DmlExecutionProvider")
+            if p in avail]
+    return gpus + ["CPUExecutionProvider"]
+
+
 class DrivingModel:
     """Stateful: holds the feature/desire ringbuffers between steps."""
 
@@ -72,12 +89,12 @@ class DrivingModel:
                  intra_op_threads: int | None = None,
                  vision_path: str | None = None,
                  policy_path: str | None = None) -> None:
-        # DirectML accelerates the vision encoder (the big one). The policy
-        # head currently fails to initialize on DML (opset-20 op the DML EP
-        # rejects with E_INVALIDARG), and at ~3 ms on CPU it isn't the
-        # bottleneck anyway. Caller can override either list.
+        # The GPU accelerates the vision encoder (the big one). The policy
+        # head fails to initialize on DML (opset-20 op the DML EP rejects
+        # with E_INVALIDARG), and at ~3 ms on CPU it isn't the bottleneck
+        # anyway. Caller can override either list.
         if providers is None:
-            providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
+            providers = gpu_providers()
         if policy_providers is None:
             policy_providers = ["CPUExecutionProvider"]
         from pathlib import Path
