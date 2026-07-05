@@ -44,7 +44,21 @@ def _make_session(path: Path, providers: list[str],
         # whole machine at 20 Hz even though a few threads already beat the
         # 50 ms frame budget. Cap it when running alongside a game.
         so.intra_op_num_threads = intra_op_threads
-    return ort.InferenceSession(str(path), sess_options=so, providers=providers)
+    try:
+        return ort.InferenceSession(str(path), sess_options=so,
+                                    providers=providers)
+    except Exception as exc:
+        # A GPU EP can REJECT a model at session init (e.g. DML hits an
+        # op it doesn't support in some supercombos: "80070057 The
+        # parameter is incorrect") — and ORT raises instead of falling
+        # back. Requesting a GPU must never crash the panel: retry CPU.
+        if providers == ["CPUExecutionProvider"]:
+            raise
+        print(f"[model] {providers[0]} failed to initialize for "
+              f"{path.name} ({exc.__class__.__name__}) — falling back "
+              f"to CPU", flush=True)
+        return ort.InferenceSession(str(path), sess_options=so,
+                                    providers=["CPUExecutionProvider"])
 
 
 class DrivingModel:
