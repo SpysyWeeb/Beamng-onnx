@@ -130,7 +130,8 @@ start.bat
 ```
 
 Pick your options and press **START**. On CPU that's the entire install
-— no GPU setup.
+— no GPU setup. Once you're in the car, run **CAL** (`r`) before the
+first engage — see the calibration note under *Running*.
 
 > **Hybrid-mode note:** the captured camera is the game window itself,
 > read per-window via `PrintWindow` — so it works even with other
@@ -230,6 +231,17 @@ itself:
 Both spawns are detached, so closing the launcher (it auto-closes ~3 s
 after START) never takes down the game or panel. The control panel logs
 to `debug_out/control_panel_last.log`.
+
+> **⚠ First drive: calibrate before engaging.** A fresh car has no
+> steering-rack fit, so pressing `e` does nothing except log
+> `engage blocked: steering not calibrated (0/100 samples)`. Run
+> **CAL** first — the panel button or the `r` key. It drives a short
+> scripted slalom to measure how wheel input maps to steering; once it
+> finishes (~100 samples), `e` engages. The fit is saved **per
+> vehicle**, so it's a one-time step for each car. Alternatives:
+> driving manually for a bit feeds the same learner, and `f`
+> force-engages past the gate (steering is sloppy until the fit
+> converges — not recommended).
 
 **Manual pieces** (`python` = `.venv\Scripts\python`):
 
