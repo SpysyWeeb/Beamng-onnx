@@ -13,6 +13,7 @@ Each step:
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from pathlib import Path
 
@@ -61,6 +62,24 @@ def _make_session(path: Path, providers: list[str],
                                     providers=["CPUExecutionProvider"])
 
 
+def _add_nvidia_dll_dirs() -> None:
+    """Put the pip-installed CUDA/cuDNN DLL dirs (site-packages/
+    nvidia/*/bin) on the process DLL search path. preload_dlls() loads
+    the MAIN libraries, but cuDNN 9 lazily LoadLibrary()s its own
+    sub-engines by bare name (cudnn_engines_*_9.dll) and fails with
+    CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED unless their dir is
+    searchable too."""
+    try:
+        import nvidia
+    except ImportError:
+        return
+    for pkg_dir in nvidia.__path__:
+        for bin_dir in Path(pkg_dir).glob("*/bin"):
+            os.add_dll_directory(str(bin_dir))
+            os.environ["PATH"] = (str(bin_dir) + os.pathsep
+                                  + os.environ.get("PATH", ""))
+
+
 def gpu_providers() -> list[str]:
     """Best available execution-provider stack, in preference order:
     CUDA (onnxruntime-gpu) > DirectML (onnxruntime-directml) > CPU.
@@ -69,10 +88,12 @@ def gpu_providers() -> list[str]:
     with _make_session's init fallback, requesting a GPU is always
     safe: a model an EP rejects just lands on CPU."""
     avail = ort.get_available_providers()
-    if "CUDAExecutionProvider" in avail and hasattr(ort, "preload_dlls"):
-        # onnxruntime-gpu >= 1.21: load the pip-installed CUDA/cuDNN
-        # DLLs (nvidia-* packages) into the process before session init.
-        ort.preload_dlls()
+    if "CUDAExecutionProvider" in avail:
+        _add_nvidia_dll_dirs()
+        if hasattr(ort, "preload_dlls"):
+            # onnxruntime-gpu >= 1.21: load the pip-installed CUDA/cuDNN
+            # DLLs (nvidia-* packages) into the process before session init.
+            ort.preload_dlls()
     gpus = [p for p in ("CUDAExecutionProvider", "DmlExecutionProvider")
             if p in avail]
     return gpus + ["CPUExecutionProvider"]
